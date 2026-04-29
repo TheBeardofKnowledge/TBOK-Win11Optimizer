@@ -14,7 +14,7 @@ cls
 TITLE TBOK Windows Performance Optimizer
 :Menu
 rundll32.exe cmdext.dll,MessageBeepStub
-ECHO Welcome to the Beard of Knowledge Windows Performance Optimizer
+ECHO Welcome to The Beard of Knowledge Windows Performance Optimizer
 ECHO ============================================================
 ECHO.
 ECHO        ::::::::::: :::::::::   ::::::::  :::    ::: 
@@ -87,6 +87,7 @@ sc config AJRouter start=Disabled
 sc config AppVClient start=Disabled
 sc config NetTcpPortSharing start=Disabled
 sc config DialogBlockingService start=Disabled
+sc config DiagTrack start=Disabled
 sc config UevAgentService start=Disabled
 sc config ssh-agent start=Disabled
 ECHO.
@@ -131,6 +132,7 @@ sc config DisplayEnhancementService start=Manual
 sc config DmEnrollmentSvc start=Manual
 sc config dmwappushservice start=Manual
 sc config dot3svc start=Manual
+sc config DoSvc start=Manual
 sc config embeddedmode start=Manual
 sc config fdPHost start=Manual
 sc config fhsvc start=Manual
@@ -245,7 +247,6 @@ sc config svsvc start=Manual
 sc config swprv start=Manual
 ::sysmain should be disabled for low ram systems, but benefits mechanical hard drive systems
 sc config SysMain start=Manual
-
 sc config TabletInputService start=Manual
 sc config TapiSrv start=Manual
 sc config TieringEngineService start=Manual
@@ -315,7 +316,6 @@ ECHO.
 sc config AudioEndpointBuilder start=Automatic
 sc config AudioSrv start=Automatic
 sc config Audiosrv start=Automatic
-sc config autotimesvc start=Automatic
 sc config BFE start=Automatic
 sc config BITS start=AutomaticDelayedStart
 sc config BrokerInfrastructure start=Automatic
@@ -332,11 +332,14 @@ sc config dusmsvc start=Automatic
 sc config EventLog start=Automatic
 sc config EventSystem start=Automatic
 sc config FontCache start=Automatic
+sc config gpsvc start=Automatic
+sc config iphlpsvc start=Automatic
 sc config LSM start=Automatic
 sc config LanmanServer start=Automatic
 sc config LanmanWorkstation start=Automatic
 sc config MapsBroker start=AutomaticDelayedStart
 sc config MpsSvc start=Automatic
+sc config nsi start=Automatic
 sc config OneSyncSvc_* start=Automatic
 sc config Power start=Automatic
 sc config ProfSvc start=Automatic
@@ -349,32 +352,28 @@ sc config SamSs start=Automatic
 sc config Schedule start=Automatic
 sc config ShellHWDetection start=Automatic
 sc config Spooler start=Automatic
+sc config sppsvc start=AutomaticDelayedStart
 sc config SystemEventsBroker start=Automatic
 sc config Themes start=Automatic
+sc config tiledatamodelsvc start=Automatic
 sc config TrkWks start=Automatic
 sc config tzautoupdate start=Automatic
+sc config uhssvc start=AutomaticDelayedStart
 sc config UserManager start=Automatic
 sc config VGAuthService start=Automatic
 sc config VMTools start=Automatic
 sc config W32Time start=Automatic
+sc config webthreatdefusersvc_* start=Automatic
 sc config WSearch start=AutomaticDelayedStart
 sc config Wcmsvc start=Automatic
 sc config WinDefend start=Automatic
 sc config Winmgmt start=Automatic
 sc config WlanSvc start=Automatic
 sc config WpnUserService_* start=Automatic
-sc config XboxGipSvc start=AutomaticDelayedStart
-sc config gpsvc start=Automatic
-sc config iphlpsvc start=Automatic
-sc config mpssvc start=Automatic
-sc config nsi start=Automatic
-sc config sppsvc start=AutomaticDelayedStart
-sc config tiledatamodelsvc start=Automatic
-sc config webthreatdefusersvc_* start=Automatic
 sc config wscsvc start=AutomaticDelayedStart
-sc config uhssvc start=AutomaticDelayedStart
 sc config wuauserv start=AutomaticDelayedStart
 sc config wudfsvc start=AutomaticDelayedStart
+sc config XboxGipSvc start=AutomaticDelayedStart
 
 ECHO.
 ECHO Enabling System Level Improvements for all users
@@ -384,20 +383,30 @@ ECHO Optimize system responsiveness
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
 ECHO Disabling network throttling
-REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /d 0xFFFFFFFF (decimal: 4294967295)
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
+
+ECHO Increasing system responsiveness
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
 ECHO Speed up shutdown time
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_DWORD /d 1000 /f
 		
 ECHO Turn off telemetry data collection
-REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
-REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v DiagTrack /t REG_DWORD /d 0 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v LimitEnhancedDiagnosticDataWindowsAnalytics /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\DiagTrack /v Start /t REG_DWORD /d 00000004 /f
+::next line possibly eol
+REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 
-::GPO option to disable telemetry
+::GPO option to disable telemetry - Applies to Pro versions only
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\AutoLogger-Diagtrack-Listener" /v Start /t REG_DWORD /d 0 /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener" /v Start /t REG_DWORD /d 0 /f
+
+::Disable Wi-Fi Sense
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
 
@@ -407,77 +416,70 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t RE
 ::ECHO Enable verbose logon status
 ::REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v VerboseStatus /d 1 REG_DWORD /f
 
-::ECHO disable privacy settings experience
-::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 0 /f
+::ECHO disable privacy settings experience - CTT winutil has 0
+::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
 
-::ECHO don't use personalized lock screen
-::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 0 /f
+::ECHO don't use personalized lock screen - CTT winutil has 0
+::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 1 /f
 
 ECHO =================edge tweaks=================
-::disable start boost
+ECHO Disable start boost - Edge runs on startup even if you dont use it
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_WORD /d 0 /f
 
-::dont show first run experience
+ECHO Disable exhaustive first run experience
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f
 
-::disable game mode
+ECHO Disabling gamer mode for Edge
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
 
-::dont submit user feedback
+ECHO Disabling submit user feedback
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v UserFeedbackAllowed /t REG_DWORD /d 0 /f
 
-::disable search box suggestion
-REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
-
-::disable shopping assistant
+ECHO Disabling shopping assistant ads
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
-::END EDGE tweaks
+ECHO =================end edge tweaks=================
 
-::Windows Defender sample reporting
+ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 
-:: SkyDrive
-::[hkey_local_machine\software\policies\microsoft\windows\skydrive]
-::"disablefilesync"=dword:00000001
-
-::; Kill OneDrive from hooking into Explorer even when disabled
-::[HKEY_CLASSES_ROOT\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
-::"System.IsPinnedToNameSpaceTree"=dword:00000000
-::[HKEY_CLASSES_ROOT\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}]
-::"System.IsPinnedToNameSpaceTree"=dword:00000000
+ECHO Disable EOL SkyDrive persistent sync - OneDrive replaced but hook still exists
+REG ADD "HKLM\software\policies\microsoft\windows\skydrive" /v disablefilesync /t REG_DWORD /d 00000001 /f
 
 
-
-::====================user level tweaks=======================
 :usertweaks
+ECHO ==================== Begin user level tweaks =======================
 
-::Running Script for WPFTweaksDisableExplorerAutoDiscovery
-::Removed HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags
-::Removed HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU
-::Created HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell
-::Set FolderType to NotSpecified
-::Please sign out and back in or restart your computer to apply the changes!
-::disable automatic folder discovery
-::HKCU\\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell String Value "FolderType" value "NotSpecified"
+ECHO Speed up FileExplorer browsing and saving files by disabling FolderAutomaticDiscovery
+REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
+REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" /f
+REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
+REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
 
 ::disable game DVR
-::HKCU\System\GameConfigStore |Value: GameDVR_Enabled | GameDVR_FSEBehaviorMode | HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR | value 
+::HKCU\System\GameConfigStore |Value: GameDVR_Enabled | GameDVR_FSEBehaviorMode | 
+::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR | value
+::Set HKCU:\System\GameConfigStore\GameDVR_FSEBehavior to 2
+::Set HKCU:\System\GameConfigStore\GameDVR_Enabled to 0
+::Set HKCU:\System\GameConfigStore\GameDVR_HonorUserFSEBehaviorMode to 1
+::Set HKCU:\System\GameConfigStore\GameDVR_EFSEFeatureFlags to 0
+::HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR was not found, Creating...
+::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
 
-::enable end task
-::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings | Value: TaskbarEndTask | Recommended Value: 1
+ECHO Enabling end task from Taskbar - super useful
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f
 
-::show full context menus in Windows 11
-::HKCU\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32
+ECHO Enabling show full right-click context menus in Windows 11
+REG ADD "HKCU\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f
 
-::disable search box suggestions
-::HKCU\Software\Policies\Microsoft\Windows\Explorer | Value: DisableSearchBoxSuggestions | Recommended Value: 1
+ECHO Disable Explorer search box suggestions -Ads-
+REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
 
-::pin more apps on the start menu
-::HHKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced | Value: Start_Layout | Recommended Value: 1
+ECHO Pinning more apps on the start menu for less wasted space
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /v 1 /f
 
-::speed up menu show delay
-::HKCU\Control Panel\Desktop | Value: MenuShowDelay | Recommended Value: "10" (faster menu response)
+ECHO Setting speed up menu show delay - Windows default is 400ms wtaf
+REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10
 
 ::disable bing search in start menu
 ::HKCU\Software\Microsoft\Windows\CurrentVersion\Search | Value: BingSearchEnabled | Recommended Value: 0
@@ -540,12 +542,6 @@ REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsen
 ::No LMS.exe files found in Program Files directories.
 ::Intel LMS vPro service has been disabled, removed, and blocked.
 
-::Set HKCU:\System\GameConfigStore\GameDVR_FSEBehavior to 2
-::Set HKCU:\System\GameConfigStore\GameDVR_Enabled to 0
-::Set HKCU:\System\GameConfigStore\GameDVR_HonorUserFSEBehaviorMode to 1
-::Set HKCU:\System\GameConfigStore\GameDVR_EFSEFeatureFlags to 0
-::HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR was not found, Creating...
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
 
 ::==Scheduled Tasks==
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser
@@ -668,7 +664,19 @@ ECHO Reset and Redetect Windows HPET dependency - fixes rare issue where timer c
 bcdedit /deletevalue useplatformclock
 
 ECHO Disable power throttling (Gaming Tweak)
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v PowerThrottlingOff /d 1 REG_DWORD /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v PowerThrottlingOff /t REG_DWORD /d 1 /f
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v NoLazyMode /t REG_DWORD /d 00000000 /f
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v AlwaysOn /t REG_DWORD /d 00000000 /f
+::same key but add "AlwaysOn"=dword:00000000 and "NoLazyMode"=dword:00000000?
+
+ECHO Setting GPU priority for Full Screen Apps and Games
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v Priority /t REG_DWORD /d 6 /f
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Medium /f
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "SFIO Priority" /t REG_SZ /d High /f
+::REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Latency Sensitive" /t REG_SZ /d True /f
+::same key but add "Latency Sensitive"="True"?
+
 
 ================================
 :REBOOT
