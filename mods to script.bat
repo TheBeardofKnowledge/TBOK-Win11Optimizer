@@ -379,6 +379,9 @@ ECHO.
 ECHO Enabling System Level Improvements for all users
 ECHO.
 
+ECHO Restoring the much beloved F8 menu availability on startup
+::bcdedit /set {default} bootmenupolicy legacy
+
 ECHO Optimize system responsiveness
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
@@ -401,26 +404,26 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\DiagTrack /v Start /t REG_DWORD 
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 
-::GPO option to disable telemetry - Applies to Pro or Enterprise versions only
+ECHO GPO option to disable telemetry - Applies to Pro or Enterprise versions only
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener" /v Start /t REG_DWORD /d 0 /f
 
-::Disable Wi-Fi Sense
+ECHO Disabling Wi-Fi Sense through registry
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
 
-::WAP Push Message Routing Service - Required for Enterprise MDM
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t REG_DWORD /d 00000004 /f
+::ECHO Disable WAP Push Message Routing Service - Required for Enterprise MDM
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t REG_DWORD /d 00000004 /f
 
-::ECHO Enable verbose logon status
-::REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v VerboseStatus /d 1 REG_DWORD /f
+ECHO Enable verbose logon-off status -optional-
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v VerboseStatus /d 1 REG_DWORD /f
 
-::ECHO disable privacy settings experience - CTT winutil has 0
-::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
+ECHO disable privacy settings experience - CTT winutil has 0
+REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
 
-::ECHO don't use personalized lock screen - CTT winutil has 0
-::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 1 /f
+ECHO don't use personalized lock screen - CTT winutil has 0
+REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 0 /f
 
 ECHO =================edge tweaks=================
 ECHO Disable start boost - Edge runs on startup even if you dont use it
@@ -429,8 +432,8 @@ REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_WO
 ECHO Disable exhaustive first run experience
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f
 
-ECHO Disabling gamer mode for Edge
-REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
+::ECHO Disabling gamer mode for Edge
+::REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
 
 ECHO Disabling submit user feedback
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v UserFeedbackAllowed /t REG_DWORD /d 0 /f
@@ -443,18 +446,18 @@ ECHO Disabling Windows Defender sample reporting - sends all scanned unknown fil
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 
-ECHO Disable EOL SkyDrive persistent sync - OneDrive replaced but hook still exists
-REG ADD "HKLM\software\policies\microsoft\windows\skydrive" /v disablefilesync /t REG_DWORD /d 00000001 /f
-
-
 :usertweaks
+ECHO System level registry tweaks completed
+ECHO.
+
 ECHO ==================== Begin user level tweaks =======================
+ECHO.
 
 ECHO Speed up FileExplorer browsing and saving files by disabling FolderAutomaticDiscovery
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
-REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
+::REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
 
 ::disable game DVR
 ::HKCU\System\GameConfigStore |Value: GameDVR_Enabled | GameDVR_FSEBehaviorMode | 
@@ -463,7 +466,6 @@ REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\B
 ::Set HKCU:\System\GameConfigStore\GameDVR_Enabled to 0
 ::Set HKCU:\System\GameConfigStore\GameDVR_HonorUserFSEBehaviorMode to 1
 ::Set HKCU:\System\GameConfigStore\GameDVR_EFSEFeatureFlags to 0
-::HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR was not found, Creating...
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
 
 ECHO Enabling end task from Taskbar - super useful
@@ -476,56 +478,69 @@ ECHO Disable Explorer search box suggestions -Ads-
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
 
 ECHO Pinning more apps on the start menu for less wasted space
-REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /v 1 /f
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
 
 ECHO Setting speed up menu show delay - Windows default is 400ms wtaf
-REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10
+REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10 /f
 
-::disable bing search in start menu
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Search | Value: BingSearchEnabled | Recommended Value: 0
+ECHO Disabling bing search in start menu
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
-::disable visual effects -explorer
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects | Value: VisualFXSetting | Recommended Value: 2
+ECHO Disabling visual effects -explorer WinUtil has it on 2 -set 3 for normal look
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 3 /f
 
-::disable transparency effects
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize | Value: EnableTransparency | Suggestion: 0 
+ECHO Disable transparency effects
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f 
 
-==ads=
-::disable file explorer ads
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced | Value: ShowSyncProviderNotifications | Recommended Value: 0
+ECHO Start Disabling User level ads in Windows
+ECHO.
 
-::disable finish setup ads
-::HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement | Value: ScoobeSystemSettingEnabled | Recommended Value: 0
+ECHO Disabling file explorer ads
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSyncProviderNotifications /t REG_DWORD /d 0 /f
 
-::disable lock screen tips and ads
-::HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager | Value: RotatingLockScreenOverlayEnabled | Recommended Value: 0
+ECHO Disabling finish setup ads
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /t REG_DWORD /d 0 /f
 
-::disable personalized ads
-::HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo | Value: Enabled | Recommended Value: 0
+ECHO Disabling lock screen tips and ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v RotatingLockScreenOverlayEnabled /t REG_DWORD /d 0 /f
 
-::disable settings ads
-::HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager | Value: SubscribedContent-338393Enabled + SubscribedContent-353694Enabled + SubscribedContent-353696Enabled | Recommended Value: 0
+ECHO Disabling personalized ads
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f
 
-::disable start menu ads
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced | Value: Start_IrisRecommendations | Recommended Value: 0
 
-::disable tailored experiences
-::HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy | Value: TailoredExperiencesWithDiagnosticDataEnabled | Recommended Value: 0
+ECHO Disabling welcome experience ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-310093Enabled /t REG_DWORD /d 0 /f
+ECHO Disabling settings ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338387Enabled /t REG_DWORD /d 0 /f
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353694Enabled /t REG_DWORD /d 0 /f
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353696Enabled /t REG_DWORD /d 0 /f
+ECHO Disabling auto install of suggested apps - Get more out of windows ad space
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f
+ECHO Disabling general tips and ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f
+ECHO Disabling home screen ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338393Enabled /t REG_DWORD /d 0 /f
+ECHO Disabling Timeline Suggestions ads
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353698Enabled /t REG_DWORD /d 0 /f
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SystemPaneSuggestionsEnabled /t REG_DWORD /d 0 /f
+REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f
 
-::disable general tips and ads
-::HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager | Value: SubscribedContent-338389Enabled | Recommended Value: 0
+ECHO Disabling start menu ads
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f
 
-::disable welcome experience ads
-::HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager | Value: SubscribedContent-310093Enabled | Recommended Value: 0
+ECHO Disabling tailored experiences
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f
 
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration\IsResumeAllowed to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDa to 0
+ECHO Disabling Cross-Device Resume -optional
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v IsResumeAllowed /t RED_DWORD /d 0
 
+ECHO ===========================================================================================================PENDING=========================================================================
 ::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 1
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 ::Set HKCU:\.Default\Control Panel\Keyboard\InitialKeyboardIndicators to 2
 ::Set HKCU:\Control Panel\Keyboard\InitialKeyboardIndicators to 2
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\BingSearchEnabled to 0
-::Set HKCU:\Control Panel\Accessibility\StickyKeys\Flags to 58
+
+REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 58 /f
 ::RightClickMenu
 ::Restarting explorer.exe ...
 ::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DisableWpbtExecution to 1
