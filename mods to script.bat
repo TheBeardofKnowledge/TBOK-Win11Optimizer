@@ -2,7 +2,7 @@
 color fA
 ::Automatically check and get admin rights ::
 ECHO Running Admin shell in order to make the changes
-:checkPrivileges 
+:CheckPrivileges 
 	NET FILE 1>NUL 2>NUL
 	if '%errorlevel%' == '0' ( goto gotPrivileges ) else ( goto getPrivileges ) 
 :getPrivileges
@@ -28,7 +28,7 @@ ECHO.
 ECHO ============================================================
 ECHO.
 ECHO Please choose
-ECHO 1. Apply all improvements - except gaming tweaks
+ECHO 1. Apply all improvements - except gaming tweaks -DEFAULT-
 ECHO 2. Apply only system level improvements
 ECHO 3. Apply only user level improvements
 ECHO 4. Apply only gaming tweaks *in development*
@@ -36,17 +36,17 @@ ECHO 5. EXIT
 ECHO.
 ECHO ============================================================
 CHOICE /c 1234 /n /m "Enter 1-4: (Default: 1 in 10 seconds): " /t 10 /d 1
-if errorlevel 4 goto :exit
-if errorlevel 3 goto :gamingtweaks
-if errorlevel 2 goto :usertweaks
-if errorlevel 1 goto :systemtweaks
+if errorlevel 4 goto :EXIT
+if errorlevel 3 goto :GamingTweaks
+if errorlevel 2 goto :UserTweaks
+if errorlevel 1 goto :SystemTweaks
 
 
-:systemtweaks
+:SystemTweaks
 ECHO.
 ECHO Starting selected changes
 ECHO.
-:hibernation
+:Hibernation
 ECHO Setting Hibernation based on PC chassis type
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
 ::	1. Most modern PC's come with an SSD or m.2 NVME drive and fast startup is not required.
@@ -77,13 +77,14 @@ ECHO Setting Hibernation based on PC chassis type
 	ECHO Desktop detected - disabled hibernation mode
 	powercfg -h off
 
-:services
+:Services
 ECHO.
 ECHO Setting Unecessary Windows Services to Optimized State
 ECHO.
 ECHO Disabling services that are not used or should be disabled
 ECHO.
-sc config AJRouter start=Disabled
+::AllJoin service not in windows 11pro-ent-ltsc
+::sc config AJRouter start=Disabled
 sc config AppVClient start=Disabled
 sc config NetTcpPortSharing start=Disabled
 sc config DialogBlockingService start=Disabled
@@ -400,7 +401,7 @@ REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTeleme
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v LimitEnhancedDiagnosticDataWindowsAnalytics /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\DiagTrack /v Start /t REG_DWORD /d 00000004 /f
-::next lines possibly eol but have been documented - possibly older telemitry framework
+::next lines possibly eol but have been documented by MS - possibly older telemitry framework
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 
@@ -413,17 +414,17 @@ ECHO Disabling Wi-Fi Sense through registry
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
 
-::ECHO Disable WAP Push Message Routing Service - Required for Enterprise MDM
+::ECHO Disable WAP Push Message Routing Service - Found Required for Enterprise MDM - excluding
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t REG_DWORD /d 00000004 /f
 
-ECHO Enable verbose logon-off status -optional-
+ECHO Enable verbose logon-off status -optional but helpful-
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v VerboseStatus /d 1 REG_DWORD /f
 
-ECHO disable privacy settings experience - CTT winutil has 0
+ECHO Disable privacy settings experience - CTT winutil has 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
 
-ECHO don't use personalized lock screen - CTT winutil has 0
-REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 0 /f
+ECHO don't use personalized lock screen with ads - MS Spotlight - Default 0
+REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 1 /f
 
 ECHO =================edge tweaks=================
 ECHO Disable start boost - Edge runs on startup even if you dont use it
@@ -446,7 +447,7 @@ ECHO Disabling Windows Defender sample reporting - sends all scanned unknown fil
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 
-:usertweaks
+:UserTweaks
 ECHO System level registry tweaks completed
 ECHO.
 
@@ -670,7 +671,7 @@ Running Script for WPFTweaksPowershell7Tele
 ::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\GlobalUserDisabled to 1
 
 =================================
-:Gaming
+:GamingTweaks
 ECHO.
 ECHO Begin Gaming Tweaks Section
 ECHO.
