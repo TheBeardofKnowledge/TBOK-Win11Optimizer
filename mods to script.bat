@@ -1,7 +1,21 @@
 @ECHO OFF
-color fA
-::Automatically check and get admin rights ::
-ECHO Running Admin shell in order to make the changes
+setlocal enableextensions enabledelayedexpansion
+	color f0
+::script helper objects
+
+:: Log stored in current script directory
+set "LOGFILE=%~dp0TBOKWinOptimizer.log"
+
+::LOG and echo helper to avoid duplicate lines
+::usage call :LOG "message"
+:LOG 
+echo %~1
+echo %~1>>"%LOGFILE%"
+exit /b
+	
+::automatically check and get admin rights ::
+ECHO Running Admin shell in order to make have permission to make the changes
+
 :CheckPrivileges 
 	NET FILE 1>NUL 2>NUL
 	if '%errorlevel%' == '0' ( goto gotPrivileges ) else ( goto getPrivileges ) 
@@ -10,6 +24,7 @@ ECHO Running Admin shell in order to make the changes
     	powershell -Command "Start-Process cmd -ArgumentList '/c %~s0 %*' -Verb RunAs"
     	exit /b
 :gotPrivileges 
+
 cls
 TITLE TBOK Windows Performance Optimizer
 :Menu
@@ -31,7 +46,7 @@ ECHO Please choose
 ECHO 1. Apply all improvements - except gaming tweaks -DEFAULT-
 ECHO 2. Apply only system level improvements
 ECHO 3. Apply only user level improvements
-ECHO 4. Apply only gaming tweaks *in development*
+ECHO 4. Apply only gaming tweaks
 ECHO 5. EXIT
 ECHO.
 ECHO ============================================================
@@ -43,6 +58,43 @@ if errorlevel 1 goto :SystemTweaks
 
 
 :SystemTweaks
+ECHO Checking if System Restore is enabled...
+	reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v RPSessionInterval
+	if !errorlevel! equ 0 (
+    ECHO System Restore is enabled - checking required services...
+    
+    :: Check if Volume Shadow Copy service is running
+    sc query vss | find "RUNNING"
+    if !errorlevel! neq 0 (
+        ECHO Starting Volume Shadow Copy service...
+        net start vss
+        timeout /t 2 /nobreak >nul
+    )
+    :: Allow creating restore points more frequently than 24 hours
+    reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f
+    :: Wait for registry change to take effect
+    timeout /t 2 /nobreak >nul
+    
+    ECHO Creating restore point...
+    PowerShell -ExecutionPolicy Bypass -Command "try { Checkpoint-Computer -Description 'Before TBOK Windows Performance Optimizer' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; exit 0 } catch { exit 1 }"
+    if !errorlevel! equ 0 (
+        ECHO Restore point created successfully.
+        call :LOG "Restore point created successfully"
+    ) else (
+        ECHO WARNING: Could not create restore point.
+        ECHO This may be due to:
+        ECHO  - A restore point was created in the last 24 hours
+        ECHO  - System Protection is disabled for the system drive
+        ECHO  - Volume Shadow Copy service issues
+        ECHO  - Insufficient disk space
+        ECHO.
+        ECHO The script will continue without a restore point.
+        call :LOG "WARNING: Restore point creation failed"
+        pause
+    )
+) else (
+    call :LOG "System Restore disabled - restore point skipped"
+)
 ECHO.
 ECHO Starting selected changes
 ECHO.
@@ -311,86 +363,87 @@ sc config XblGameSave start=Manual
 sc config XboxNetApiSvc start=Manual
 
 ECHO.
-ECHO Ensuring required services are set to Automatic State
+ECHO Ensuring required services are set to auto State
 ECHO This is just in case you used a previous utility that set the services incorrectly
 ECHO.
-sc config AudioEndpointBuilder start=Automatic
-sc config AudioSrv start=Automatic
-sc config Audiosrv start=Automatic
-sc config BFE start=Automatic
-sc config BITS start=AutomaticDelayedStart
-sc config BrokerInfrastructure start=Automatic
-sc config BthHFSrv start=Automatic
-sc config CDPUserSvc_* start=Automatic
-sc config CoreMessagingRegistrar start=Automatic
-sc config CryptSvc start=Automatic
-sc config DPS start=Automatic
-sc config DcomLaunch start=Automatic
-sc config Dhcp start=Automatic
-sc config DispBrokerDesktopSvc start=Automatic
-sc config Dnscache start=Automatic
-sc config dusmsvc start=Automatic
-sc config EventLog start=Automatic
-sc config EventSystem start=Automatic
-sc config FontCache start=Automatic
-sc config gpsvc start=Automatic
-sc config iphlpsvc start=Automatic
-sc config LSM start=Automatic
-sc config LanmanServer start=Automatic
-sc config LanmanWorkstation start=Automatic
-sc config MapsBroker start=AutomaticDelayedStart
-sc config MpsSvc start=Automatic
-sc config nsi start=Automatic
-sc config OneSyncSvc_* start=Automatic
-sc config Power start=Automatic
-sc config ProfSvc start=Automatic
-sc config RpcEptMapper start=Automatic
-sc config RpcSs start=Automatic
-sc config RemoteAccess start=Automatic
-sc config RemoteRegistry start=Automatic
-sc config SENS start=Automatic
-sc config SamSs start=Automatic
-sc config Schedule start=Automatic
-sc config ShellHWDetection start=Automatic
-sc config Spooler start=Automatic
-sc config sppsvc start=AutomaticDelayedStart
-sc config SystemEventsBroker start=Automatic
-sc config Themes start=Automatic
-sc config tiledatamodelsvc start=Automatic
-sc config TrkWks start=Automatic
-sc config tzautoupdate start=Automatic
-sc config uhssvc start=AutomaticDelayedStart
-sc config UserManager start=Automatic
-sc config VGAuthService start=Automatic
-sc config VMTools start=Automatic
-sc config W32Time start=Automatic
-sc config webthreatdefusersvc_* start=Automatic
-sc config WSearch start=AutomaticDelayedStart
-sc config Wcmsvc start=Automatic
-sc config WinDefend start=Automatic
-sc config Winmgmt start=Automatic
-sc config WlanSvc start=Automatic
-sc config WpnUserService_* start=Automatic
-sc config wscsvc start=AutomaticDelayedStart
-sc config wuauserv start=AutomaticDelayedStart
-sc config wudfsvc start=AutomaticDelayedStart
-sc config XboxGipSvc start=AutomaticDelayedStart
+sc config AudioEndpointBuilder start=auto
+sc config AudioSrv start=auto
+sc config Audiosrv start=auto
+sc config BFE start=auto
+sc config BITS start=delayed-auto
+sc config BrokerInfrastructure start=auto
+sc config BthHFSrv start=auto
+sc config CDPUserSvc_* start=auto
+sc config CoreMessagingRegistrar start=auto
+sc config CryptSvc start=auto
+sc config DPS start=auto
+sc config DcomLaunch start=auto
+sc config Dhcp start=auto
+sc config DispBrokerDesktopSvc start=auto
+sc config Dnscache start=auto
+sc config dusmsvc start=auto
+sc config EventLog start=auto
+sc config EventSystem start=auto
+sc config FontCache start=auto
+sc config gpsvc start=auto
+sc config iphlpsvc start=auto
+sc config LSM start=auto
+sc config LanmanServer start=auto
+sc config LanmanWorkstation start=auto
+sc config MapsBroker start=delayed-auto
+sc config MpsSvc start=auto
+sc config nsi start=auto
+sc config OneSyncSvc_* start=auto
+sc config Power start=auto
+sc config ProfSvc start=auto
+sc config RpcEptMapper start=auto
+sc config RpcSs start=auto
+sc config RemoteAccess start=auto
+sc config RemoteRegistry start=auto
+sc config SENS start=auto
+sc config SamSs start=auto
+sc config Schedule start=auto
+sc config ShellHWDetection start=auto
+sc config Spooler start=auto
+sc config sppsvc start=delayed-auto
+sc config SystemEventsBroker start=auto
+sc config Themes start=auto
+sc config tiledatamodelsvc start=auto
+sc config TrkWks start=auto
+sc config tzautoupdate start=auto
+sc config uhssvc start=delayed-auto
+sc config UserManager start=auto
+sc config VGAuthService start=auto
+sc config VMTools start=auto
+sc config W32Time start=auto
+sc config webthreatdefusersvc_* start=auto
+sc config WSearch start=delayed-auto
+sc config Wcmsvc start=auto
+sc config WinDefend start=auto
+sc config Winmgmt start=auto
+sc config WlanSvc start=auto
+sc config WpnUserService_* start=auto
+sc config wscsvc start=delayed-auto
+sc config wuauserv start=delayed-auto
+sc config wudfsvc start=delayed-auto
+sc config XboxGipSvc start=delayed-auto
 
 ECHO.
-ECHO Enabling System Level Improvements for all users
+ECHO Enabling System Level Improvements
 ECHO.
 
-ECHO Restoring the much beloved F8 menu availability on startup
+::ECHO Restoring the much beloved F8 menu availability on startup - WHY T F DID THEY REMOVE THAT
+::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu
 ::bcdedit /set {default} bootmenupolicy legacy
-
-ECHO Optimize system responsiveness
-REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
 ECHO Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
 
-ECHO Increasing system responsiveness
-REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
+ECHO Optimize system responsiveness
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
+
+ECHO Increasing system responsiveness for Games
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
 ECHO Speed up shutdown time
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_DWORD /d 1000 /f
@@ -423,17 +476,17 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v Verbo
 ECHO Disable privacy settings experience - CTT winutil has 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
 
-ECHO don't use personalized lock screen with ads - MS Spotlight - Default 0
+ECHO don't use personalized lock screen with ads - MS Spotlight ads- Default 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization /v NoLockScreen /t REG_DWORD /d 1 /f
 
 ECHO =================edge tweaks=================
-ECHO Disable start boost - Edge runs on startup even if you dont use it
+ECHO Disable Edge so-called start boost - Edge runs on startup even if you dont use it
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_WORD /d 0 /f
 
 ECHO Disable exhaustive first run experience
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f
 
-::ECHO Disabling gamer mode for Edge
+::ECHO Disabling gamer mode for Edge so it doesnt monitor your active applications - who uses Edge anyway?
 ::REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
 
 ECHO Disabling submit user feedback
@@ -443,7 +496,7 @@ ECHO Disabling shopping assistant ads
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
 ECHO =================end edge tweaks=================
 
-ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft
+ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 
@@ -451,14 +504,14 @@ REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsen
 ECHO System level registry tweaks completed
 ECHO.
 
-ECHO ==================== Begin user level tweaks =======================
+ECHO ==================== Begin user level tweaks - pending to add apply to all users loop =======================
 ECHO.
 
-ECHO Speed up FileExplorer browsing and saving files by disabling FolderAutomaticDiscovery
+ECHO Speed up FileExplorer browsing and saving files by disabling FolderautoDiscovery
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
-::REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
+REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
 
 ::disable game DVR
 ::HKCU\System\GameConfigStore |Value: GameDVR_Enabled | GameDVR_FSEBehaviorMode | 
@@ -654,10 +707,6 @@ REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 
 ::HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat was not found, Creating...
 ::Set HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat\IsUserEligible to 0
 
-::POWERSettings
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0\Attributes to 2
-::HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e was not found, Creating...
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e\Attributes  to 2
 
 Running Script for WPFTweaksPowershell7Tele
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI\DisableAIDataAnalysis to 1
@@ -667,8 +716,8 @@ Running Script for WPFTweaksPowershell7Tele
 ::Running Script for WPFTweaksRecallOff
 ::Disable Recall
 
-::DISABLE ALLOW WINDOWS APPS TO RUN IN THE BACKGROUND
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\GlobalUserDisabled to 1
+DISABLE ALLOW WINDOWS APPS TO RUN IN THE BACKGROUND
+Set HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\GlobalUserDisabled to 1
 
 =================================
 :GamingTweaks
@@ -679,11 +728,19 @@ ECHO.
 ECHO Reset and Redetect Windows HPET dependency - fixes rare issue where timer clock was not detected properly
 bcdedit /deletevalue useplatformclock
 
-ECHO Disable power throttling (Gaming Tweak)
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v PowerThrottlingOff /t REG_DWORD /d 1 /f
+ECHO Enabling HAGS - Hardware Accelerated GPU Scheduling
+RED ADD "Computer\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v "HWSchMode" /t REG_DWORD /d 2 /f
+
+::ECHO Disable power throttling Gaming Tweak only for desktops - this will kill the battery on a laptop
+::add detection mechanism for desktop mode or make optional choice to apply anyway.
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v PowerThrottlingOff /t REG_DWORD /d 1 /f
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v NoLazyMode /t REG_DWORD /d 00000000 /f
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v AlwaysOn /t REG_DWORD /d 00000000 /f
 ::same key but add "AlwaysOn"=dword:00000000 and "NoLazyMode"=dword:00000000?
+
+::Enable Ultimate performance power plan for desktops only
+::Set HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0\Attributes to 2
+::Set HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e\Attributes  to 2
 
 ECHO Setting GPU priority for Full Screen Apps and Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
@@ -699,6 +756,7 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 ECHO.
 ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
 ECHO DO YOU WISH TO REBOOT NOW?
+::Add command for Y/N reboot
 ECHO.
 
 :EXIT
