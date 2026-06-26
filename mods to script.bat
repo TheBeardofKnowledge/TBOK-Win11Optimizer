@@ -58,6 +58,7 @@ if errorlevel 1 goto :SystemTweaks
 
 
 :SystemTweaks
+ECHO Before anything is modified - create system restore point
 ECHO Checking if System Restore is enabled...
 	reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v RPSessionInterval
 	if !errorlevel! equ 0 (
@@ -71,6 +72,7 @@ ECHO Checking if System Restore is enabled...
         timeout /t 2 /nobreak >nul
     )
     :: Allow creating restore points more frequently than 24 hours
+	ECHO Ensuring restore point can be created immediately
     reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f
     :: Wait for registry change to take effect
     timeout /t 2 /nobreak >nul
@@ -88,7 +90,7 @@ ECHO Checking if System Restore is enabled...
         ECHO  - Volume Shadow Copy service issues
         ECHO  - Insufficient disk space
         ECHO.
-        ECHO The script will continue without a restore point.
+        ECHO The script can continue without a restore point.
         call :LOG "WARNING: Restore point creation failed"
         pause
     )
@@ -99,7 +101,7 @@ ECHO.
 ECHO Starting selected changes
 ECHO.
 :Hibernation
-ECHO Setting Hibernation based on PC chassis type
+ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
 ::	1. Most modern PC's come with an SSD or m.2 NVME drive and fast startup is not required.
 ::	2. Hybrid shutdown/hibernation/fast startup often causes Windows Updates to NOT install properly.
@@ -124,11 +126,32 @@ ECHO Setting Hibernation based on PC chassis type
 :laptop
 	ECHO Laptop detected - enabled hibernation mode
 	powercfg -h on
-	goto BadPrintJobs
+	goto virtualmemory
 :desktop
 	ECHO Desktop detected - disabled hibernation mode
 	powercfg -h off
 
+:virtualmemory
+ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions
+	::soon to be deprecated WMIC method
+	wmic computersystem where name="%computername%" set AutomaticManagedPageFile=False
+	wmic pagefileset where name="c:\\pagefile.sys" set InitialSize=8192,MaximumSize=1638
+	wmic pagefileset list /format:list
+		powershell -NoProfile -Command ^
+"$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); ^
+$min = [uint32]8192; ^
+$max = [uint32]($ramMB * 2); ^
+if ($max -lt $min) { $max = $min }; ^
+Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; ^
+$pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; ^
+if ($pf) { ^
+    Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} ^
+} else { ^
+    New-CimInstance Win32_PageFileSetting -Property @{Name='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} ^
+}; ^
+Write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
+
+	
 :Services
 ECHO.
 ECHO Setting Unecessary Windows Services to Optimized State
@@ -279,7 +302,7 @@ sc config seclogon start=Manual
 sc config SecurityHealthService start=Manual
 sc config SEMgrSvc start=Manual
 sc config Sense start=Manual
-::sensor services are traditionally only good for tablet function devices
+
 sc config SensorDataService start=Manual
 sc config SensorService start=Manual
 sc config SensrSvc start=Manual
@@ -507,22 +530,22 @@ ECHO.
 ECHO ==================== Begin user level tweaks - pending to add apply to all users loop =======================
 ECHO.
 
-ECHO Speed up FileExplorer browsing and saving files by disabling FolderautoDiscovery
+ECHO Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
 
-::disable game DVR
-::HKCU\System\GameConfigStore |Value: GameDVR_Enabled | GameDVR_FSEBehaviorMode | 
-::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR | value
-::Set HKCU:\System\GameConfigStore\GameDVR_FSEBehavior to 2
-::Set HKCU:\System\GameConfigStore\GameDVR_Enabled to 0
-::Set HKCU:\System\GameConfigStore\GameDVR_HonorUserFSEBehaviorMode to 1
-::Set HKCU:\System\GameConfigStore\GameDVR_EFSEFeatureFlags to 0
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
+::disable game DVR - negatively affects e-core parking - disabled this section because it negatively affects AMD X3D chips CCD cache routing
+::REG ADD "HKLM\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement" /v AllowGameDVR /t REG_DWORD /d 0 /f
+::REG ADD "HKCU\System\GameConfigStore" |v GameDVR_Enabled /t REG_DWORD /d 0 /f
+::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_FSEBehavior /t REG_DWORD /d 2 /f
+::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_FSEBehaviorMode /t REG_DWORD /d 2 /f
+::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_HonorUserFSEBehaviorMode /t REG_DWORD /d 0 /f
+::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_EFSEFeatureFlags /t REG_DWORD /d 0 /f
+::REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
 
-ECHO Enabling end task from Taskbar - super useful
+ECHO Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f
 
 ECHO Enabling show full right-click context menus in Windows 11
@@ -530,25 +553,29 @@ REG ADD "HKCU\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\Inpr
 
 ECHO Disable Explorer search box suggestions -Ads-
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
-
-ECHO Pinning more apps on the start menu for less wasted space
-REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
-
-ECHO Setting speed up menu show delay - Windows default is 400ms wtaf
-REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10 /f
-
 ECHO Disabling bing search in start menu
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling visual effects -explorer WinUtil has it on 2 -set 3 for normal look
+ECHO Enable allow Pinning more apps on the start menu for less wasted space
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
+
+ECHO Setting speed up menu show delay - Windows default is 400ms wtaf - why wait so long
+REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10 /f
+
+ECHO Disabling some gaudi resource consuming desktop visual effects -explorer
+ECHO Setting visual effects setting to custom - other options - default 0 - 1 best appearance - 2 best performance
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 3 /f
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAnimations /t REG_DWORD /d 0 /f
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAI /t REG_DWORD /d 0 /f
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f
+::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
+
 
 ECHO Disable transparency effects
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f 
 
 ECHO Start Disabling User level ads in Windows
 ECHO.
-
 ECHO Disabling file explorer ads
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSyncProviderNotifications /t REG_DWORD /d 0 /f
 
