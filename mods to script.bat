@@ -101,13 +101,13 @@ ECHO.
 ECHO Starting selected changes
 ECHO.
 :Hibernation
-ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops
+ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops - especially with SSD
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
-::	1. Most modern PC's come with an SSD or m.2 NVME drive and fast startup is not required.
+::	1. Most modern PC's come with an SSD or m2 NVME drive and fast startup is not required as it was made to improve performance for systems with slower spinning disks
 ::	2. Hybrid shutdown/hibernation/fast startup often causes Windows Updates to NOT install properly.
 ::	3. "system up time" timer in task manager keeps running with this enabled.
-::	.
-::	1 Reason to enable on a laptop:
+::	4. Software with poor memory management design can cause excess ram usage
+::	Only Reason to enable on a laptop:
 ::	Only good thing from Hibernate/Fast Startup is if your Laptop/Tablet battery dies while in sleep/standby mode...
 ::	your open files are saved because the laptop will wake, save data in ram to hibernation file, then shutdown.
 	SetLocal EnableExtensions
@@ -132,17 +132,15 @@ ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for 
 	powercfg -h off
 
 :virtualmemory
-ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions
-	::soon to be deprecated WMIC method
+ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions due to SwapFile expansion delay
+	::soon to be deprecated WMIC method fallback
 	wmic computersystem where name="%computername%" set AutomaticManagedPageFile=False
 	wmic pagefileset where name="c:\\pagefile.sys" set InitialSize=8192,MaximumSize=1638
 	wmic pagefileset list /format:list
-		powershell -NoProfile -Command ^
-"$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); ^
-$min = [uint32]8192; ^
-$max = [uint32]($ramMB * 2); ^
-if ($max -lt $min) { $max = $min }; ^
-Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; ^
+	
+	::new powershell method with logic for maximum size following Best Practices
+		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); $min = [uint32]8192; $max = [uint32]($ramMB * 2); ^
+if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; ^
 $pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; ^
 if ($pf) { ^
     Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} ^
@@ -302,7 +300,6 @@ sc config seclogon start=Manual
 sc config SecurityHealthService start=Manual
 sc config SEMgrSvc start=Manual
 sc config Sense start=Manual
-
 sc config SensorDataService start=Manual
 sc config SensorService start=Manual
 sc config SensrSvc start=Manual
@@ -321,7 +318,7 @@ sc config StiSvc start=Manual
 sc config StorSvc start=Manual
 sc config svsvc start=Manual
 sc config swprv start=Manual
-::sysmain should be disabled for low ram systems, but benefits mechanical hard drive systems
+::sysmain should be disabled for low ram systems - but benefits mechanical hard drive systems
 sc config SysMain start=Manual
 sc config TabletInputService start=Manual
 sc config TapiSrv start=Manual
@@ -455,23 +452,27 @@ ECHO.
 ECHO Enabling System Level Improvements
 ECHO.
 
-::ECHO Restoring the much beloved F8 menu availability on startup - WHY T F DID THEY REMOVE THAT
+ECHO Restoring the much beloved F8 Startup menu availability - WHY TF DID THEY REMOVE THAT
 ::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu
-::bcdedit /set {default} bootmenupolicy legacy
+bcdedit /set {default} bootmenupolicy legacy
 
 ECHO Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
 
-ECHO Optimize system responsiveness
+ECHO Optimize system responsiveness 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
+::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
 ECHO Increasing system responsiveness for Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
 ECHO Speed up shutdown time
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_DWORD /d 1000 /f
+
+ECHO Enabling long file system path support - why is this disabled by default Microsoft
+REG ADD "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 		
-ECHO Turn off telemetry data collection
+ECHO Turning off telemetry data collection Local Machine
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f
@@ -512,22 +513,23 @@ REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG
 ::ECHO Disabling gamer mode for Edge so it doesnt monitor your active applications - who uses Edge anyway?
 ::REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling submit user feedback
+ECHO Disabling submit user feedback because Microsoft does not actually listen - worthless
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v UserFeedbackAllowed /t REG_DWORD /d 0 /f
 
 ECHO Disabling shopping assistant ads
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
-ECHO =================end edge tweaks=================
+ECHO ===============end edge tweaks=================
 
 ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 
-:UserTweaks
 ECHO System level registry tweaks completed
 ECHO.
 
-ECHO ==================== Begin user level tweaks - pending to add apply to all users loop =======================
+:UserTweaks
+ECHO.
+ECHO ==================== Begin user level tweaks - pending to add apply to all users - for each - loop =======================
 ECHO.
 
 ECHO Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
@@ -536,7 +538,7 @@ REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\B
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell /v FolderType /t REG_SZ /d NotSpecified /f
 
-::disable game DVR - negatively affects e-core parking - disabled this section because it negatively affects AMD X3D chips CCD cache routing
+::disable game DVR - negatively affects e-core parking - disabled this section because it negatively affects chips with CCD cache routing
 ::REG ADD "HKLM\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement" /v AllowGameDVR /t REG_DWORD /d 0 /f
 ::REG ADD "HKCU\System\GameConfigStore" |v GameDVR_Enabled /t REG_DWORD /d 0 /f
 ::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_FSEBehavior /t REG_DWORD /d 2 /f
@@ -544,6 +546,9 @@ REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\B
 ::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_HonorUserFSEBehaviorMode /t REG_DWORD /d 0 /f
 ::REG ADD "HKCU:\System\GameConfigStore" /v GameDVR_EFSEFeatureFlags /t REG_DWORD /d 0 /f
 ::REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR to 0
+
+ECHO DISABLE ALLOW WINDOWS APPS TO RUN IN THE BACKGROUND
+REG ADD "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f
 
 ECHO Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f
@@ -559,7 +564,7 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEna
 ECHO Enable allow Pinning more apps on the start menu for less wasted space
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
 
-ECHO Setting speed up menu show delay - Windows default is 400ms wtaf - why wait so long
+ECHO Setting speed up menu show delay - Windows default is 400ms - why wait so long
 REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10 /f
 
 ECHO Disabling some gaudi resource consuming desktop visual effects -explorer
@@ -568,12 +573,13 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" 
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAnimations /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAI /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f
+::research this - possible webview dependency removal
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
 
-
-ECHO Disable transparency effects
+ECHO Disable transparency effects - optional
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f 
 
+:ADS
 ECHO Start Disabling User level ads in Windows
 ECHO.
 ECHO Disabling file explorer ads
@@ -588,7 +594,6 @@ REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" 
 ECHO Disabling personalized ads
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f
 
-
 ECHO Disabling welcome experience ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-310093Enabled /t REG_DWORD /d 0 /f
 ECHO Disabling settings ads
@@ -597,7 +602,7 @@ REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" 
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353696Enabled /t REG_DWORD /d 0 /f
 ECHO Disabling auto install of suggested apps - Get more out of windows ad space
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f
-ECHO Disabling general tips and ads
+ECHO Disabling general tips and ads - why are these together
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f
 ECHO Disabling home screen ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338393Enabled /t REG_DWORD /d 0 /f
@@ -606,22 +611,86 @@ REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" 
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SystemPaneSuggestionsEnabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling start menu ads
+
+ECHO ==Disable Windows User Telemetry==
+REG ADD "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection\AllowTelemetry to 0
+REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection\AllowTelemetry to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\ContentDeliveryAllowed to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\OemPreInstalledAppsEnabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\PreInstalledAppsEnabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\PreInstalledAppsEverEnabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SilentInstalledAppsEnabled to 0
+REG ADD "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338387Enabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338388Enabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338389Enabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-353698Enabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SystemPaneSuggestionsEnabled to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Siuf\Rules was not found, Creating...
+REG ADD "HKCU:\SOFTWARE\Microsoft\Siuf\Rules\NumberOfSIUFInPeriod to 0
+REG DEL "HKCU:\SOFTWARE\Microsoft\Siuf\Rules\PeriodInNanoSeconds
+REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection\DoNotShowFeedbackNotifications to 1
+REG ADD "HKCU:\SOFTWARE\Policies\Microsoft\Windows\CloudContent\DisableTailoredExperiencesWithDiagnosticData to 1
+REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo\DisabledByGroupPolicy to 1
+REG ADD "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled to 1
+
+REG ADD "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config\DODownloadMode to 0
+REG ADD "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization\DODownloadMode to 0
+::REG ADD "HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance\fAllowToGetHelp to 0
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager\EnthusiastMode to 1
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 1
+REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People\PeopleBand to 0
+::REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\LaunchTo to 1
+
+
+
+::Set HKCU:\Control Panel\Desktop\AutoEndTasks to 1
+::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\ClearPageFileAtShutdown to 0
+::Set HKLM:\SYSTEM\ControlSet001\Services\Ndu\Start to 2
+::Set HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters\IRPStackSize to 30
+::HKCU:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds was not found, Creating...
+::Set HKCU:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds\EnableFeeds to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds\ShellFeedsTaskbarViewMode to 2
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\HideSCAMeetNow to 1
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement\ScoobeSystemSettingEnabled to 0
+
+::TweaksTele
+::Set HKCU:\Control Panel\Desktop\DragFullWindows to 0
+::Set HKCU:\Control Panel\Desktop\MenuShowDelay to 200
+::Set HKCU:\Control Panel\Desktop\WindowMetrics\MinAnimate to 0
+::Set HKCU:\Control Panel\Keyboard\KeyboardDelay to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewAlphaSelect to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewShadow to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarAnimations to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects\VisualFXSetting to 3
+::Set HKCU:\Software\Microsoft\Windows\DWM\EnableAeroPeek to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarMn to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDa to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 1
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 0
+
+
+
+ECHO Fixing the Start Menu
+ECHO Set the searchbox taskbar to icon only for less wasted space
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f
+
+ECHO Disabling Bing Search in start menu results
+REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
+
+ECHO Disabling sticky keys feature
+REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 58 /f
+
+ECHO Disabling start menu ads method 2
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f
 
-ECHO Disabling tailored experiences
+ECHO Disabling tailored experiences with telemitry
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling Cross-Device Resume -optional
+ECHO Disabling Cross-Device Resume -optional but reverse this if you sync your phone to your pc - honestly your web browser should do this - mostly web
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v IsResumeAllowed /t RED_DWORD /d 0
 
-ECHO ===========================================================================================================PENDING=========================================================================
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 1
-REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
-::Set HKCU:\.Default\Control Panel\Keyboard\InitialKeyboardIndicators to 2
-::Set HKCU:\Control Panel\Keyboard\InitialKeyboardIndicators to 2
+ECHO ==========================================PENDING==========================================
 
-REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 58 /f
 ::RightClickMenu
 ::Restarting explorer.exe ...
 ::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DisableWpbtExecution to 1
@@ -656,69 +725,6 @@ REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\PcaPatchDbTask
 ::Disabling Scheduled Task Microsoft\Windows\Maps\MapsUpdateTask
 
-::==Disable Windows Telemetry==
-::Set HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection\AllowTelemetry to 0
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection\AllowTelemetry to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\ContentDeliveryAllowed to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\OemPreInstalledAppsEnabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\PreInstalledAppsEnabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\PreInstalledAppsEverEnabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SilentInstalledAppsEnabled to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338387Enabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338388Enabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-338389Enabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SubscribedContent-353698Enabled to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager\SystemPaneSuggestionsEnabled to 0
-::HKCU:\SOFTWARE\Microsoft\Siuf\Rules was not found, Creating...
-::Set HKCU:\SOFTWARE\Microsoft\Siuf\Rules\NumberOfSIUFInPeriod to 0
-::Remove HKCU:\SOFTWARE\Microsoft\Siuf\Rules\PeriodInNanoSeconds
-
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection\DoNotShowFeedbackNotifications to 1
-::Set HKCU:\SOFTWARE\Policies\Microsoft\Windows\CloudContent\DisableTailoredExperiencesWithDiagnosticData to 1
-::HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo was not found, Creating...
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo\DisabledByGroupPolicy to 1
-::Set HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\Disabled to 1
-::HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config was not found, Creating...
-::Set HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config\DODownloadMode to 0
-::HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization was not found, Creating...
-::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization\DODownloadMode to 0
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance\fAllowToGetHelp to 0
-::HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager was not found, Creating...
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager\EnthusiastMode to 1
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 0
-::HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People was not found, Creating...
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People\PeopleBand to 0
-::Set HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\LaunchTo to 1
-
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled to 1
-
-::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\SystemResponsiveness to 0
-::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
-::Set HKCU:\Control Panel\Desktop\AutoEndTasks to 1
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\ClearPageFileAtShutdown to 0
-::Set HKLM:\SYSTEM\ControlSet001\Services\Ndu\Start to 2
-::Set HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters\IRPStackSize to 30
-::HKCU:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds was not found, Creating...
-::Set HKCU:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds\EnableFeeds to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds\ShellFeedsTaskbarViewMode to 2
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\HideSCAMeetNow to 1
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement\ScoobeSystemSettingEnabled to 0
-
-::TweaksTele
-::Set HKCU:\Control Panel\Desktop\DragFullWindows to 0
-::Set HKCU:\Control Panel\Desktop\MenuShowDelay to 200
-::Set HKCU:\Control Panel\Desktop\WindowMetrics\MinAnimate to 0
-::Set HKCU:\Control Panel\Keyboard\KeyboardDelay to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewAlphaSelect to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewShadow to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarAnimations to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects\VisualFXSetting to 3
-::Set HKCU:\Software\Microsoft\Windows\DWM\EnableAeroPeek to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarMn to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDa to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 1
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 0
-
 ::Display
 ::EndTaskOnTaskbar
 :: Co-pilot disabling
@@ -735,7 +741,7 @@ REG ADD "HKCU:\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 
 ::Set HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat\IsUserEligible to 0
 
 
-Running Script for WPFTweaksPowershell7Tele
+::Running Script for WPFTweaksPowershell7Tele
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI\DisableAIDataAnalysis to 1
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI\AllowRecallEnablement to 0
 ::Set HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState to 0
@@ -743,8 +749,6 @@ Running Script for WPFTweaksPowershell7Tele
 ::Running Script for WPFTweaksRecallOff
 ::Disable Recall
 
-DISABLE ALLOW WINDOWS APPS TO RUN IN THE BACKGROUND
-Set HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications\GlobalUserDisabled to 1
 
 =================================
 :GamingTweaks
