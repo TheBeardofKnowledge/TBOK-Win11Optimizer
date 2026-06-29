@@ -1,6 +1,7 @@
 @ECHO OFF
 setlocal enableextensions enabledelayedexpansion
 	color f0
+	
 ::script helper objects
 
 :: Log stored in current script directory
@@ -26,7 +27,7 @@ ECHO Running Admin shell in order to make have permission to make the changes
 :gotPrivileges 
 
 cls
-TITLE TBOK Windows Performance Optimizer
+TITLE TBOK Windows 11 Performance Optimizer
 :Menu
 rundll32.exe cmdext.dll,MessageBeepStub
 ECHO Welcome to The Beard of Knowledge Windows Performance Optimizer
@@ -447,9 +448,9 @@ sc config wscsvc start=delayed-auto
 sc config wuauserv start=delayed-auto
 sc config wudfsvc start=delayed-auto
 sc config XboxGipSvc start=delayed-auto
-
+ECHO Windows Services Changes Completed
 ECHO.
-ECHO Enabling System Level Improvements
+ECHO Enabling System-wide Improvements
 ECHO.
 
 ECHO Restoring the much beloved F8 Startup menu availability - WHY TF DID THEY REMOVE THAT
@@ -458,11 +459,11 @@ bcdedit /set {default} bootmenupolicy legacy
 
 ECHO Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
+::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
 
-ECHO Optimize system responsiveness 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
+ECHO Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
-::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
 ECHO Increasing system responsiveness for Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
@@ -529,7 +530,7 @@ ECHO.
 
 :UserTweaks
 ECHO.
-ECHO ==================== Begin user level tweaks - pending to add apply to all users - for each - loop =======================
+ECHO ==================== Begin per-user level tweaks - pending to add apply to all users - for each loop =======================
 ECHO.
 
 ECHO Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
@@ -575,6 +576,19 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Ta
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f
 ::research this - possible webview dependency removal
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
+::Set HKCU:\Control Panel\Desktop\DragFullWindows to 1
+::Set HKCU:\Control Panel\Desktop\MenuShowDelay to 200
+::Set HKCU:\Control Panel\Desktop\WindowMetrics\MinAnimate to 0
+::Set HKCU:\Control Panel\Keyboard\KeyboardDelay to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewAlphaSelect to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewShadow to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarAnimations to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects\VisualFXSetting to 3
+::Set HKCU:\Software\Microsoft\Windows\DWM\EnableAeroPeek to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarMn to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDa to 0
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 1
+::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 1
 
 ECHO Disable transparency effects - optional
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f 
@@ -641,8 +655,6 @@ REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowT
 REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People\PeopleBand to 0
 ::REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\LaunchTo to 1
 
-
-
 ::Set HKCU:\Control Panel\Desktop\AutoEndTasks to 1
 ::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\ClearPageFileAtShutdown to 0
 ::Set HKLM:\SYSTEM\ControlSet001\Services\Ndu\Start to 2
@@ -652,22 +664,6 @@ REG ADD "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Peopl
 ::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Feeds\ShellFeedsTaskbarViewMode to 2
 ::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\HideSCAMeetNow to 1
 ::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement\ScoobeSystemSettingEnabled to 0
-
-::TweaksTele
-::Set HKCU:\Control Panel\Desktop\DragFullWindows to 0
-::Set HKCU:\Control Panel\Desktop\MenuShowDelay to 200
-::Set HKCU:\Control Panel\Desktop\WindowMetrics\MinAnimate to 0
-::Set HKCU:\Control Panel\Keyboard\KeyboardDelay to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewAlphaSelect to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ListviewShadow to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarAnimations to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects\VisualFXSetting to 3
-::Set HKCU:\Software\Microsoft\Windows\DWM\EnableAeroPeek to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarMn to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDa to 0
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\ShowTaskViewButton to 1
-::Set HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\SearchboxTaskbarMode to 0
-
 
 
 ECHO Fixing the Start Menu
