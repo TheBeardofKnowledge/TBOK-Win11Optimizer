@@ -1,13 +1,14 @@
-@ECHO OFF
-setlocal enableextensions enabledelayedexpansion
+	@ECHO OFF
 	color f0
 	
 ::script helper objects
+::enable extended script logic and variables
+setlocal enableextensions enabledelayedexpansion
 
 :: Log stored in current script directory
 set "LOGFILE=%~dp0TBOKWinOptimizer.log"
 
-::LOG and echo helper to avoid duplicate lines
+::LOG and echo helper to avoid duplicate lines in script
 ::usage call :LOG "message"
 :LOG 
 echo %~1
@@ -27,7 +28,7 @@ ECHO Running Admin shell in order to make have permission to make the changes
 :gotPrivileges 
 
 cls
-TITLE TBOK Windows 11 Performance Optimizer
+TITLE TBOK Windows Performance Optimizer
 :Menu
 rundll32.exe cmdext.dll,MessageBeepStub
 ECHO Welcome to The Beard of Knowledge Windows Performance Optimizer
@@ -475,7 +476,7 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t R
 
 ECHO Enabling long file system path support - why is this disabled by default Microsoft
 REG ADD "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
-		
+
 ECHO Turning off telemetry data collection Local Machine
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
@@ -527,6 +528,10 @@ ECHO ===============end edge tweaks=================
 ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
+	
+::Chris Titus has this listed as one thing, but Microsoft lists it as Windows Protection bit for signed code---conflict	
+::ECHO Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 0 /f	
 
 ECHO System level registry tweaks completed
 ECHO.
@@ -686,9 +691,7 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Config
 
 ECHO ==========================================PENDING==========================================
 
-::RightClickMenu
-::Restarting explorer.exe ...
-::Set HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DisableWpbtExecution to 1
+
 
 ::DisableLMS1
 ::Kill LMS process
@@ -720,8 +723,7 @@ ECHO ==========================================PENDING==========================
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\PcaPatchDbTask
 ::Disabling Scheduled Task Microsoft\Windows\Maps\MapsUpdateTask
 
-::Display
-::EndTaskOnTaskbar
+
 :: Co-pilot disabling
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot\TurnOffWindowsCopilot to 1
 ::HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot was not found, Creating...
@@ -736,15 +738,125 @@ ECHO ==========================================PENDING==========================
 ::Set HKLM:\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat\IsUserEligible to 0
 
 
-::Running Script for WPFTweaksPowershell7Tele
+::Disable Powershell telemitry
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI\DisableAIDataAnalysis to 1
 ::Set HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI\AllowRecallEnablement to 0
 ::Set HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy\VerifiedAndReputablePolicyState to 0
 
-::Running Script for WPFTweaksRecallOff
+
 ::Disable Recall
 
+:: ================================
+:: LOG FUNCTION
+:: ================================
+:Log
+echo [%DATE% %TIME%] %~1 >> "%LOGFILE%"
+goto :eof
 
+:: ================================
+:: APPLY REGISTRY SETTINGS
+:: ================================
+:ApplySettings
+set BASE=%~1
+
+call :Log Applying settings to %BASE%
+
+:: ---- YOUR REGISTRY KEYS HERE ----
+
+reg add "%BASE%\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f >nul 2>&1
+if errorlevel 1 call :Log ERROR setting DisableSearchBoxSuggestions for %BASE%
+
+:: ADD MORE KEYS BELOW (copy/paste pattern)
+:: reg add "%BASE%\Path" /v ValueName /t REG_DWORD /d 1 /f
+:: if errorlevel 1 call :Log ERROR setting ValueName for %BASE%
+
+goto :eof
+
+:: ================================
+:: START
+:: ================================
+echo Starting registry deployment...
+call :Log ===== START =====
+
+:: ================================
+:: 1. CURRENTLY LOADED USERS
+:: ================================
+call :Log Processing loaded user hives
+
+for /f "tokens=1" %%U in ('reg query HKEY_USERS') do (
+    echo %%U | findstr /i "_Classes" >nul
+    if errorlevel 1 (
+        call :ApplySettings "%%U"
+    )
+)
+
+:: ================================
+:: 2. ALL USER PROFILES
+:: ================================
+call :Log Processing user profiles (NTUSER.DAT)
+
+for /d %%D in ("C:\Users\*") do (
+
+    set USERNAME=%%~nxD
+
+    :: Skip system profiles
+    ::if /I not "!USERNAME!"=="Public" if /I not "!USERNAME!"=="Default" if /I not "!USERNAME!"=="Default User" (
+
+        if exist "%%D\NTUSER.DAT" (
+
+            call :Log Loading hive for %%D
+
+            reg load HKU\TempHive "%%D\NTUSER.DAT" >nul 2>&1
+            if errorlevel 1 (
+                call :Log ERROR loading hive for %%D
+            ) else (
+                call :ApplySettings "HKU\TempHive"
+
+                reg unload HKU\TempHive >nul 2>&1
+                if errorlevel 1 (
+                    call :Log ERROR unloading hive for %%D
+                ) else (
+                    call :Log Successfully processed %%D
+                )
+            )
+        )
+    )
+)
+
+:: ================================
+:: 3. DEFAULT PROFILE
+:: ================================
+call :Log Processing Default profile
+
+if exist "C:\Users\Default\NTUSER.DAT" (
+
+    reg load HKU\DefaultHive "C:\Users\Default\NTUSER.DAT" >nul 2>&1
+    if errorlevel 1 (
+        call :Log ERROR loading Default profile
+    ) else (
+        call :ApplySettings "HKU\DefaultHive"
+
+        reg unload HKU\DefaultHive >nul 2>&1
+        if errorlevel 1 (
+            call :Log ERROR unloading Default profile
+        ) else (
+            call :Log Default profile updated
+        )
+    )
+) else (
+    call :Log Default NTUSER.DAT not found
+)
+
+:: ================================
+:: DONE
+:: ================================
+call :Log ===== COMPLETE =====
+echo Done. Log file: %LOGFILE%
+
+endlocal
+exit /b
+``
+ECHO ======================================END PENDING==========================================
 =================================
 :GamingTweaks
 ECHO.
@@ -778,6 +890,7 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 
 
 ================================
+endlocal
 :REBOOT
 ECHO.
 ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
