@@ -51,6 +51,9 @@ ECHO 3. Apply only user level improvements
 ECHO 4. Apply only gaming tweaks
 ECHO 5. EXIT
 ECHO.
+ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
+ECHO https://buymeacoffee.com/thebeardofl
+ECHO.
 ECHO ============================================================
 CHOICE /c 1234 /n /m "Enter 1-4: (Default: 1 in 10 seconds): " /t 10 /d 1
 if errorlevel 4 goto :EXIT
@@ -886,12 +889,14 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Medium /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "SFIO Priority" /t REG_SZ /d High /f
 ::REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Latency Sensitive" /t REG_SZ /d True /f
-::same key but add "Latency Sensitive"="True"?
 
 
 ================================
 endlocal
 :REBOOT
+ECHO ALL FINISHED!
+ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
+ECHO https://buymeacoffee.com/thebeardofl
 ECHO.
 ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
 ECHO DO YOU WISH TO REBOOT NOW?
