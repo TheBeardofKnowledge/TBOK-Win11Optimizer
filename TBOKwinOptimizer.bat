@@ -52,7 +52,7 @@ ECHO 4. Apply only gaming tweaks
 ECHO 5. EXIT
 ECHO.
 ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
-ECHO https://buymeacoffee.com/thebeardofl
+ECHO "https://buymeacoffee.com/thebeardofl"
 ECHO.
 ECHO ============================================================
 CHOICE /c 1234 /n /m "Enter 1-4: (Default: 1 in 10 seconds): " /t 10 /d 1
@@ -896,7 +896,7 @@ endlocal
 :REBOOT
 ECHO ALL FINISHED!
 ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
-ECHO https://buymeacoffee.com/thebeardofl
+ECHO "https://buymeacoffee.com/thebeardofl"
 ECHO.
 ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
 ECHO DO YOU WISH TO REBOOT NOW?
