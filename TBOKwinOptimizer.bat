@@ -1,8 +1,22 @@
 ::turn off echoing all commands
-@ECHO OFF
-::change the terminal color
+ECHO OFF
+::change the terminal color to something friendlier
 color f0
-	
+:: Automatically check and get admin rights ::
+ECHO Elevating permissions required for Admin access
+ECHO No changes are being made at this time.
+
+:checkPrivileges 
+	NET FILE 1>NUL 2>NUL
+	if '%errorlevel%' == '0' ( goto gotPrivileges ) else ( goto getPrivileges ) 
+:getPrivileges
+:: Not elevated, so re-run with elevation
+    	powershell -Command "Start-Process cmd -ArgumentList '/c %~s0 %*' -Verb RunAs"
+    	exit /b
+:gotPrivileges 
+
+cls	
+
 ::begin script helper objects::
 ::enable extended script logic and variable holding
 setlocal enableextensions enabledelayedexpansion
@@ -15,7 +29,8 @@ set "LOGFILE=%~dp0TBOKWinOptimizer.log"
 :LOG 
 echo %~1
 echo [%DATE% %TIME%] %~1>>"%LOGFILE%"
-exit /b
+::exit /b
+::goto EOF
 ::end script helper objects::
 
 
@@ -43,7 +58,7 @@ ECHO 3. Apply only user level improvements
 ECHO 4. Apply only gaming tweaks
 ECHO 5. EXIT
 ECHO.
-ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
+ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE - THATS WHAT POWERED THIS
 ECHO "https://buymeacoffee.com/thebeardofl"
 ECHO.
 ECHO ============================================================
@@ -70,16 +85,17 @@ ECHO Checking if System Restore is enabled...
         timeout /t 2 /nobreak >nul
     )
     :: Allow creating restore points more frequently than 24 hours
-	ECHO Ensuring restore point can be created immediately
+ECHO Ensuring restore point can be created immediately
     reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f
     :: Wait for registry change to take effect
     timeout /t 2 /nobreak >nul
-    
-    ECHO Creating restore point...
-    PowerShell -ExecutionPolicy Bypass -Command "try { Checkpoint-Computer -Description 'Before TBOK Windows Performance Optimizer' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; exit 0 } catch { exit 1 }"
+ECHO Enabling system restore feature on system drive
+  PowerShell -ExecutionPolicy RemoteSigned -Command "if (-not (Get-ComputerRestorePoint)) {Enable-ComputerRestore -Drive $Env:SystemDrive}
+ECHO Creating restore point...
+    PowerShell -ExecutionPolicy RemoteSigned -Command "try { Checkpoint-Computer -Description 'Status Before TBOK Windows Optimizer' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; exit 0 } catch { exit 1 }"
     if !errorlevel! equ 0 (
         ECHO Restore point created successfully.
-        call :LOG "Restore point created successfully"
+        ECHO "Restore point created successfully"
     ) else (
         ECHO WARNING: Could not create restore point.
         ECHO This may be due to:
@@ -88,18 +104,20 @@ ECHO Checking if System Restore is enabled...
         ECHO  - Volume Shadow Copy service issues
         ECHO  - Insufficient disk space
         ECHO.
-        ECHO The script can continue without a restore point.
-        call :LOG "WARNING: Restore point creation failed"
+        ECHO The script can continue without a restore point but use at your own risk
+        ECHO "WARNING: Restore point creation failed"
+		ECHO Either continue at your own risk or go manually create a restore point before proceeding
         pause
     )
 ) else (
-    call :LOG "System Restore disabled - restore point skipped"
+    ECHO "System Restore disabled - restore point skipped"
+)
 )
 ECHO.
 ECHO Starting selected changes
 ECHO.
 :hibernation
-ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops - especially with SSD
+ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops - especially with SSD system drives
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
 ::	1. Most modern PC's come with an SSD or m2 NVME drive and fast startup is not required as it was made to improve performance for systems with slower spinning disks
 ::	2. Hybrid shutdown/hibernation/fast startup often causes Windows Updates to NOT install properly.
@@ -108,7 +126,7 @@ ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for 
 ::	Only Reason to enable on a laptop:
 ::	Only good thing from Hibernate/Fast Startup is if your Laptop/Tablet battery dies while in sleep/standby mode...
 ::	your open files are saved because the laptop will wake, save data in ram to hibernation file, then shutdown.
-	SetLocal EnableExtensions
+
 :detectchassis
 	Set "Type=" & For /F EOL^=- %%G In ('
 	 %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command
@@ -129,326 +147,326 @@ ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for 
 	ECHO Desktop detected - disabled hibernation mode
 	powercfg -h off
 
-:virtualmemory
-ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions due to SwapFile expansion delay
-	::soon to be deprecated WMIC method fallback
-	wmic computersystem where name="%computername%" set AutomaticManagedPageFile=False
-	wmic pagefileset where name="c:\\pagefile.sys" set InitialSize=8192,MaximumSize=16384
-	wmic pagefileset list /format:list
-	
-	::new powershell method with logic for maximum size following Best Practices
-		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); $min = [uint32]8192; $max = [uint32]($ramMB * 2); ^
-if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; ^
-$pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; ^
-if ($pf) { ^
-    Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} ^
-} else { ^
-    New-CimInstance Win32_PageFileSetting -Property @{Name='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} ^
-}; ^
-Write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
-
 ECHO Restoring the much beloved F8 Startup menu availability - WHY TF DID THEY REMOVE THAT
 ::Microsoft defaults wants you to power cycle your PC 2 times before giving you options - waste of time
 ::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu
 bcdedit /set {default} bootmenupolicy legacy
+
+:virtualmemory
+ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions due to SwapFile expansion delay
+ECHO On low ram systems Windows keeps the auto mode current allocation low which causes it to fill up and expand too soon
+ECHO Tests have found that a minimum of 4096 or prefered 8192 is an optimal start - after that it should expand to double the current system ram
+ECHO If the system has very little ram though - I recommend setting the max size to 16384
+	::soon to be deprecated WMIC method fallback
+	wmic computersystem where name="%computername%" set AutomaticManagedPageFile=False
+	wmic pagefileset where name="c:\\pagefile.sys" set InitialSize=4096,MaximumSize=16384
+	wmic pagefileset list /format:list
+	
+	::new powershell method with logic for maximum size following Best Practices
+		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); $min = [uint32]4096; $max = [uint32]($ramMB * 2); if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; $pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; if ($pf) {    Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} } else {    New-CimInstance Win32_PageFileSetting -Property @{Name='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} }; write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
 	
 :SERVICES
+ECHO Fixing SvHost split process memory Management according to current memory size - works up to 4TB of RAM
+	for /f %%A in ('powershell -NoProfile -Command "(Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB"') do (set MemoryKB=%%A)
+	echo Memory: %MemoryKB% KB
+	reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d %MemoryKB% /f
+
 ECHO.
 ECHO Setting Unecessary Windows Services to Optimized State
 ECHO.
 ECHO Disabling services that are not used or should be disabled
 ECHO.
 ::AllJoin service not in windows 11pro-ent-ltsc
-::sc config AJRouter start=Disabled
-sc config AppVClient start=Disabled
-sc config NetTcpPortSharing start=Disabled
-sc config DialogBlockingService start=Disabled
-sc config DiagTrack start=Disabled
-sc config UevAgentService start=Disabled
-sc config ssh-agent start=Disabled
+::sc config AJRouter start= Disabled
+sc config AppVClient start= Disabled
+sc config NetTcpPortSharing start= Disabled
+sc config DialogBlockingService start= Disabled
+sc config DiagTrack start= Disabled
+sc config UevAgentService start= Disabled
+sc config ssh-agent start= Disabled
+::sysmain was developed to have the system load commonly used items from mechanical drives into memory for faster processing with less wait
+::Findings Rule of thumb - sysmain should be disabled on systems with < 12GB ram - but benefits mechanical hard drive systems with RAM > 12Gb
+::sysmain runs on second boot after install and uses about 70-mb ram as a constant process 
+::add logic to autodetect and apply - for now disable as a majority benefit on modern systems
+::placeholder logic for detecting system disk Type and total memory setting as variables
+::if $ram>=12GB and $disktype is SSD or NVME = disable
+::if $ram<=12GB and $disktype is SSD or NVME = disable
+::if $ram>11GB and $disktopy isNOT SSD NVME = demand
+sc config SysMain start= disable
+
 ECHO.
-ECHO Setting non-critical per-use services to manual startup
-ECHO Services set to manual allow them to work when needed
+ECHO Setting non-critical per-use services to manual startup so they can still work when needed but are not auto running on startup
+ECHO Many of these are manual by default anyway so some of this process is just to restore that behaviour in case something changed them
 ECHO.
-sc config ALG start=Manual
-sc config AppIDSv start=Manual
-sc config AppMgmt start=Manual
-sc config AppReadiness start=Manual
-sc config Appinfo start=Manual
-sc config AssignedAccessManagerSvc start=Manual
-sc config AxInstSV start=Manual
-sc config BDESVC start=Manual
-sc config BcastDVRUserService_* start=Manual
-sc config BluetoothUserService_* start=Manual
-sc config Browser start=Manual
-sc config BTAGService start=Manual
-sc config bthserv start=Manual
-sc config CaptureService_* start=Manual
-sc config cbdhsvc_* start=Manual
-sc config CDPSvc start=Manual
-sc config CertPropSvc start=Manual
-sc config cloudidsvc start=Manual
-sc config COMSysApp start=Manual
-sc config ClipSVC start=Manual
-sc config ConsentUxUserSvc_* start=Manual
-sc config CredentialEnrollmentManagerUserSvc_* start=Manual
-sc config CscService start=Manual
-sc config DcpSvc start=Manual
-sc config dcsvc start=Manual
-sc config defragsvc start=Manual
-sc config DevQueryBroker start=Manual
-sc config DeviceAssociationBrokerSvc_* start=Manual
-sc config DeviceAssociationService start=Manual
-sc config DeviceInstall start=Manual
-sc config DevicePickerUserSvc_* start=Manual
-sc config DevicesFlowUserSvc_* start=Manual
-sc config diagnosticshub.standardcollector.servic start=Manual
-sc config diagsvc start=Manual
-sc config DisplayEnhancementService start=Manual
-sc config DmEnrollmentSvc start=Manual
-sc config dmwappushservice start=Manual
-sc config dot3svc start=Manual
-sc config DoSvc start=Manual
-sc config embeddedmode start=Manual
-sc config fdPHost start=Manual
-sc config fhsvc start=Manual
-sc config hidserv start=Manual
-sc config icssvc start=Manual
-sc config EapHost start=Manual
-sc config edgeupdate start=Manual
-sc config edgeupdatem start=Manual
-sc config EFS start=Manual
-sc config EntAppSvc start=Manual
-sc config FDResPub start=Manual
-sc config Fax start=Manual
-sc config FrameServer start=Manual
-sc config FrameServerMonitor start=Manual
-sc config GraphicsPerfSvc start=Manual
-sc config HomeGroupListener start=Manual
-sc config HomeGroupProvider start=Manual
-sc config HvHost start=Manual
-sc config IEEtwCollectorService start=Manual
-sc config IKEEXT start=Manual
-sc config InstallService start=Manual
-sc config IpxlatCfgSvc start=Manual
-sc config lfsvc start=Manual
-sc config LicenseManager start=Manual
-sc config lltdsvc start=Manual
-sc config lmhosts start=Manual
-sc config LxpSvc start=Manual
-sc config McpManagementService start=Manual
-sc config MessagingService_* start=Manual
-sc config MicrosoftEdgeElevationService start=Manual
-sc config MixedRealityOpenXRSvc start=Manual
-sc config MSDTC start=Manual
-sc config MsKeyboardFilter start=Manual
-sc config MSiSCSI start=Manual
-sc config msiserver start=Manual
-sc config McpManagementService start=Manual
-sc config MessagingService_* start=Manual
-sc config MicrosoftEdgeElevationService start=Manual
-sc config MixedRealityOpenXRSvc start=Manual
-sc config MsKeyboardFilter start=Manual
-sc config NPSMSvc_* start=Manual
-sc config NaturalAuthentication start=Manual
-sc config NPSMSvc_* start=Manual
-sc config NaturalAuthentication start=Manual
-sc config NcaSvc start=Manual
-sc config NcbService start=Manual
-sc config NcdAutoSetup start=Manual
-sc config NetSetupSvc start=Manual
-sc config Netman start=Manual
-sc config NgcCtnrSvc start=Manual
-sc config NgcSvc start=Manual
-sc config NlaSvc start=Manual
-sc config NcaSvc start=Manual
-sc config NcbService start=Manual
-sc config NcdAutoSetup start=Manual
-sc config NetSetupSvc start=Manual
-sc config Netman start=Manual
-sc config NgcCtnrSvc start=Manual
-sc config NgcSvc start=Manual
-sc config NlaSvc start=Manual
-sc config netprofm start=Manual
-sc config p2pimsvc start=Manual
-sc config p2psvc start=Manual
-sc config P9RdrService_* start=Manual
-sc config PcaSvc start=Manual
-sc config PeerDistSvc start=Manual
-sc config PenService_* start=Manual
-sc config perceptionsimulation start=Manual
-sc config PerfHost start=Manual
-sc config PhoneSvc start=Manual
-sc config PimIndexMaintenanceSvc_* start=Manual
-sc config pla start=Manual
-sc config PlugPlay start=Manual
-sc config PNRPAutoReg start=Manual
-sc config PNRPsvc start=Manual
-sc config PolicyAgent start=Manual
-sc config PrintNotify start=Manual
-sc config PrintWorkflowUserSvc_* start=Manual
-sc config PushToInstall start=Manual
-sc config QWAVE start=Manual
-sc config RasAuto start=Manual
-sc config RasMan start=Manual
-sc config RetailDemo start=Manual
-sc config RmSvc start=Manual
-sc config RpcLocator start=Manual
-sc config SCPolicySvc start=Manual
-sc config ScDeviceEnum start=Manual
-sc config SCardSvr start=Manual
-sc config SDRSVC start=Manual
-sc config seclogon start=Manual
-sc config SecurityHealthService start=Manual
-sc config SEMgrSvc start=Manual
-sc config Sense start=Manual
-sc config SensorDataService start=Manual
-sc config SensorService start=Manual
-sc config SensrSvc start=Manual
-sc config SessionEnv start=Manual
-sc config SharedAccess start=Manual
-sc config SharedRealitySvc start=Manual
-sc config shpamsvc start=Manual
-sc config SmsRouter start=Manual
-sc config smphost start=Manual
-sc config SNMPTRAP start=Manual
-sc config SNMPTrap start=Manual
-sc config spectrum start=Manual
-sc config SstpSvc start=Manual
-sc config SSDPSRV start=Manual
-sc config StiSvc start=Manual
-sc config StorSvc start=Manual
-sc config svsvc start=Manual
-sc config swprv start=Manual
-::sysmain should be disabled for low ram systems - but benefits mechanical hard drive systems ::add logic to autodetect and apply
-sc config SysMain start=Manual
-sc config TabletInputService start=Manual
-sc config TapiSrv start=Manual
-sc config TieringEngineService start=Manual
-sc config TimeBroker start=Manual
-sc config TimeBrokerSvc start=Manual
-sc config TokenBroker start=Manual
-sc config TroubleshootingSvc start=Manual
-sc config TrustedInstaller start=Manual
-sc config UI0Detect start=Manual
-sc config UdkUserSvc_* start=Manual
-sc config UmRdpService start=Manual
-sc config UnistoreSvc_* start=Manual
-sc config UserDataSvc_* start=Manual
-sc config UsoSvc start=Manual
-sc config upnphost start=Manual
-sc config VacSvc start=Manual
-sc config vds start=Manual
-sc config vm3dservice start=Manual
-sc config vmicguestinterface start=Manual
-sc config vmicheartbeat start=Manual
-sc config vmickvpexchange start=Manual
-sc config vmicrdv start=Manual
-sc config vmicshutdown start=Manual
-sc config vmictimesync start=Manual
-sc config vmicvmsession start=Manual
-sc config vmicvss start=Manual
-sc config vmvss start=Manual
-sc config VSS start=Manual
-sc config WaaSMedicSvc start=Manual
-sc config WalletService start=Manual
-sc config WarpJITSvc start=Manual
-sc config wbengine start=Manual
-sc config WcsPlugInService start=Manual
-sc config wcncsvc start=Manual
-sc config WdNisSvc start=Manual
-sc config WdiServiceHost start=Manual
-sc config WdiSystemHost start=Manual
-sc config WebClient start=Manual
-sc config webthreatdefsvc start=Manual
-sc config Wecsvc start=Manual
-sc config wercplsupport start=Manual
-sc config WEPHOSTSVC start=Manual
-sc config WerSvc start=Manual
-sc config WFDSConMgrSvc start=Manual
-sc config WiaRpc start=Manual
-sc config WinHttpAutoProxySvc start=Manual
-sc config WinRM start=Manual
-sc config wisvc start=Manual
-sc config wlidsvc start=Manual
-sc config wlpasvc start=Manual
-sc config wmiApSrv start=Manual
-sc config WMPNetworkSvc start=Manual
-sc config WManSvc start=Manual
-sc config WPDBusEnum start=Manual
-sc config WpcMonSvc start=Manual
-sc config WpnService start=Manual
-sc config workfolderssvc start=Manual
-sc config WSService start=Manual
-sc config XblAuthManager start=Manual
-sc config XblGameSave start=Manual
-sc config XboxNetApiSvc start=Manual
+sc config ALG start= demand
+sc config AppIDSvc start= demand ::service doesnt exist
+sc config AppMgmt start= demand
+sc config AppReadiness start= demand
+sc config Appinfo start= demand
+sc config AssignedAccessManagerSvc start= demand
+sc config AxInstSV start= demand
+sc config BDESVC start= demand
+::? sc config BcastDVRUserService_* start= demand ::service doesnt exist
+::? sc config BluetoothUserService_* start= demand ::service doesnt exist
+::x sc config Browser start= demand ::service doesnt exist
+sc config BTAGService start= demand
+sc config bthserv start= demand
+::? sc config CaptureService_* start= demand ::service doesnt exist
+::? sc config cbdhsvc_* start= demand ::service doesnt exist
+sc config CDPSvc start= demand
+sc config CertPropSvc start= demand
+sc config cloudidsvc start= demand
+sc config COMSysApp start= demand
+::d sc config ClipSVC start= demand ::access denied
+::? sc config ConsentUxUserSvc_* start= demand ::service doesnt exist
+::? sc config CredentialEnrollmentManagerUserSvc_* start= demand ::service doesnt exist
+sc config CscService start= demand
+::sc config DcpSvc start= demand ::service doesnt exist
+sc config dcsvc start= demand
+sc config defragsvc start= demand
+sc config DevQueryBroker start= demand
+sc config DeviceAssociationBroker_* start= demand
+sc config DeviceAssociationService start= demand
+sc config DeviceInstall start= demand
+::? sc config DevicePickerUserSvc_* start= demand
+::? sc config DevicesFlowUserSvc_* start= demand
+::x sc config diagnosticshub.standardcollector.servic start= demand
+sc config diagsvc start= demand
+sc config DisplayEnhancementService start= demand
+sc config DmEnrollmentSvc start= demand
+sc config dmwappushservice start= demand
+sc config dot3svc start= demand
+::d sc config DoSvc start= demand
+::d sc config embeddedmode start= demand
+sc config fdPHost start= demand
+sc config fhsvc start= demand
+sc config hidserv start= demand
+sc config icssvc start= demand
+sc config EapHost start= demand
+sc config edgeupdate start= demand
+sc config edgeupdatem start= demand
+sc config EFS start= demand
+::d sc config EntAppSvc start= demand
+sc config FDResPub start= demand
+::x sc config Fax start= demand
+sc config FrameServer start= demand
+sc config FrameServerMonitor start= demand
+sc config GraphicsPerfSvc start= demand
+::x sc config HomeGroupListener start= demand
+::x sc config HomeGroupProvider start= demand
+sc config HvHost start= demand
+::x sc config IEEtwCollectorService start= demand
+sc config IKEEXT start= demand
+sc config InstallService start= demand
+sc config IpxlatCfgSvc start= demand
+sc config lfsvc start= demand
+sc config LicenseManager start= demand
+sc config lltdsvc start= demand
+sc config lmhosts start= demand
+sc config LxpSvc start= demand
+sc config McpManagementService start= demand
+::? sc config MessagingService_* start= demand
+sc config MicrosoftEdgeElevationService start= demand
+::x sc config MixedRealityOpenXRSvc start= demand
+sc config MSDTC start= demand
+sc config MsKeyboardFilter start= demand
+sc config MSiSCSI start= demand
+::d sc config msiserver start= demand
+sc config McpManagementService start= demand
+::x sc config MessagingService_* start= demand
+sc config MicrosoftEdgeElevationService start= demand
+::x sc config MixedRealityOpenXRSvc start= demand
+sc config MsKeyboardFilter start= demand
+::? sc config NPSMSvc_* start= demand
+sc config NaturalAuthentication start= demand
+sc config NcaSvc start= demand
+sc config NcbService start= demand
+sc config NcdAutoSetup start= demand
+sc config NetSetupSvc start= demand
+sc config Netman start= demand
+::d sc config NgcCtnrSvc start= demand
+::d sc config NgcSvc start= demand
+sc config NlaSvc start= demand
+sc config netprofm start= demand
+::x sc config p2pimsvc start= demand
+::x sc config p2psvc start= demand
+::? sc config P9RdrService_* start= demand
+sc config PcaSvc start= demand
+sc config PeerDistSvc start= demand
+::? sc config PenService_* start= demand
+sc config perceptionsimulation start= demand
+sc config PerfHost start= demand
+sc config PhoneSvc start= demand
+::? sc config PimIndexMaintenanceSvc_* start= demand
+sc config pla start= demand
+sc config PlugPlay start= demand
+::x sc config PNRPAutoReg start= demand
+::x sc config PNRPsvc start= demand
+sc config PolicyAgent start= demand
+sc config PrintNotify start= demand
+::? sc config PrintWorkflowUserSvc_* start= demand
+sc config PushToInstall start= demand
+sc config QWAVE start= demand
+sc config RasAuto start= demand
+sc config RasMan start= demand
+sc config RetailDemo start= demand
+sc config RmSvc start= demand
+sc config RpcLocator start= demand
+sc config SCPolicySvc start= demand
+sc config ScDeviceEnum start= demand
+sc config SCardSvr start= demand
+sc config SDRSVC start= demand
+sc config seclogon start= demand
+::d sc config SecurityHealthService start= demand
+sc config SEMgrSvc start= demand
+::d sc config Sense start= demand
+sc config SensorDataService start= demand
+sc config SensorService start= demand
+sc config SensrSvc start= demand
+sc config SessionEnv start= demand
+sc config SharedAccess start= demand
+::x sc config SharedRealitySvc start= demand
+sc config shpamsvc start= demand
+sc config SmsRouter start= demand
+sc config smphost start= demand
+sc config SNMPTRAP start= demand
+sc config SNMPTrap start= demand
+::x sc config spectrum start= demand
+sc config SstpSvc start= demand
+sc config SSDPSRV start= demand
+sc config StiSvc start= demand
+sc config StorSvc start= demand
+sc config svsvc start= demand
+sc config swprv start= demand
+::sysmain placeholder
+
+::x sc config TabletInputService start= demand
+sc config TapiSrv start= demand
+sc config TieringEngineService start= demand
+::x sc config TimeBroker start= demand
+::d sc config TimeBrokerSvc start= demand
+sc config TokenBroker start= demand
+sc config TroubleshootingSvc start= demand
+sc config TrustedInstaller start= demand
+::x sc config UI0Detect start= demand
+::? sc config UdkUserSvc_* start= demand
+sc config UmRdpService start= demand
+::? sc config UnistoreSvc_* start= demand
+::? sc config UserDataSvc_* start= demand
+sc config UsoSvc start= demand
+sc config upnphost start= demand
+::x sc config VacSvc start= demand
+sc config vds start= demand
+::x sc config vm3dservice start= demand
+sc config vmicguestinterface start= demand
+sc config vmicheartbeat start= demand
+sc config vmickvpexchange start= demand
+sc config vmicrdv start= demand
+sc config vmicshutdown start= demand
+sc config vmictimesync start= demand
+sc config vmicvmsession start= demand
+sc config vmicvss start= demand
+::x sc config vmvss start= demand
+sc config VSS start= demand
+::d sc config WaaSMedicSvc start= demand
+sc config WalletService start= demand
+sc config WarpJITSvc start= demand
+sc config wbengine start= demand
+::x sc config WcsPlugInService start= demand
+sc config wcncsvc start= demand
+::d sc config WdNisSvc start= demand
+sc config WdiServiceHost start= demand
+sc config WdiSystemHost start= demand
+sc config WebClient start= demand
+sc config webthreatdefsvc start= demand
+sc config Wecsvc start= demand
+sc config wercplsupport start= demand
+sc config WEPHOSTSVC start= demand
+sc config WerSvc start= demand
+sc config WFDSConMgrSvc start= demand
+sc config WiaRpc start= demand
+::d sc config WinHttpAutoProxySvc start= demand
+sc config WinRM start= demand
+sc config wisvc start= demand
+sc config wlidsvc start= demand
+sc config wlpasvc start= demand
+sc config wmiApSrv start= demand
+sc config WMPNetworkSvc start= demand
+sc config WManSvc start= demand
+sc config WPDBusEnum start= demand
+sc config WpcMonSvc start= demand
+sc config WpnService start= demand
+sc config workfolderssvc start= demand
+::x sc config WSService start= demand
+sc config XblAuthManager start= demand
+sc config XblGameSave start= demand
+sc config XboxNetApiSvc start= demand
 
 ECHO.
 ECHO Ensuring required services are set to auto State
 ECHO This is just in case you used a previous utility that set the services incorrectly
 ECHO.
-sc config AudioEndpointBuilder start=auto
-sc config AudioSrv start=auto
-sc config Audiosrv start=auto
-sc config BFE start=auto
-sc config BITS start=delayed-auto
-sc config BrokerInfrastructure start=auto
-sc config BthHFSrv start=auto
-sc config CDPUserSvc_* start=auto
-sc config CoreMessagingRegistrar start=auto
-sc config CryptSvc start=auto
-sc config DPS start=auto
-sc config DcomLaunch start=auto
-sc config Dhcp start=auto
-sc config DispBrokerDesktopSvc start=auto
-sc config Dnscache start=auto
-sc config dusmsvc start=auto
-sc config EventLog start=auto
-sc config EventSystem start=auto
-sc config FontCache start=auto
-sc config gpsvc start=auto
-sc config iphlpsvc start=auto
-sc config LSM start=auto
+sc config AudioEndpointBuilder start= auto
+sc config AudioSrv start= auto
+sc config Audiosrv start= auto
+::d sc config BFE start= auto
+sc config BITS start= delayed-auto
+sc config BrokerInfrastructure start= auto
+::x sc config BthHFSrv start= auto
+::? sc config CDPUserSvc_* start= auto
+::d sc config CoreMessagingRegistrar start= auto
+sc config CryptSvc start= auto
+sc config DPS start= auto
+::d sc config DcomLaunch start= auto
+sc config Dhcp start= auto
+sc config DispBrokerDesktopSvc start= auto
+::d sc config Dnscache start= auto
+sc config dusmsvc start= auto
+sc config EventLog start= auto
+sc config EventSystem start= auto
+sc config FontCache start= auto
+::d sc config gpsvc start= auto
+sc config iphlpsvc start= auto
+::d sc config LSM start=auto
 sc config LanmanServer start=auto
-sc config LanmanWorkstation start=auto
-sc config MapsBroker start=delayed-auto
-sc config MpsSvc start=auto
-sc config nsi start=auto
-sc config OneSyncSvc_* start=auto
-sc config Power start=auto
-sc config ProfSvc start=auto
-sc config RpcEptMapper start=auto
-sc config RpcSs start=auto
-sc config RemoteAccess start=auto
-sc config RemoteRegistry start=auto
-sc config SENS start=auto
-sc config SamSs start=auto
-sc config Schedule start=auto
-sc config ShellHWDetection start=auto
-sc config Spooler start=auto
-sc config sppsvc start=delayed-auto
-sc config SystemEventsBroker start=auto
-sc config Themes start=auto
-sc config tiledatamodelsvc start=auto
-sc config TrkWks start=auto
-sc config tzautoupdate start=auto
-sc config uhssvc start=delayed-auto
-sc config UserManager start=auto
-sc config VGAuthService start=auto
-sc config VMTools start=auto
-sc config W32Time start=auto
-sc config webthreatdefusersvc_* start=auto
-sc config WSearch start=delayed-auto
-sc config Wcmsvc start=auto
-sc config WinDefend start=auto
-sc config Winmgmt start=auto
-sc config WlanSvc start=auto
-sc config WpnUserService_* start=auto
-sc config wscsvc start=delayed-auto
-sc config wuauserv start=delayed-auto
-sc config wudfsvc start=delayed-auto
-sc config XboxGipSvc start=delayed-auto
+sc config LanmanWorkstation start= auto
+sc config MapsBroker start= delayed-auto
+::d sc config MpsSvc start= auto
+sc config nsi start= auto
+::? sc config OneSyncSvc_* start= auto
+sc config Power start= auto
+sc config ProfSvc start= auto
+::d sc config RpcEptMapper start= auto
+::d sc config RpcSs start= auto
+sc config RemoteAccess start= auto
+sc config RemoteRegistry start= auto
+sc config SENS start= auto
+sc config SamSs start= auto
+::d sc config Schedule start= auto
+sc config ShellHWDetection start= auto
+sc config Spooler start= auto
+::d sc config sppsvc start= delayed-auto
+::d sc config SystemEventsBroker start= auto
+sc config Themes start= auto
+::x sc config tiledatamodelsvc start= auto
+sc config TrkWks start= auto
+sc config tzautoupdate start= auto
+::d sc config uhssvc start= delayed-auto
+sc config UserManager start= auto
+sc config VGAuthService start= auto
+::x sc config VMTools start= auto
+sc config W32Time start= auto
+::? sc config webthreatdefusersvc_* start= auto
+sc config WSearch start= delayed-auto
+sc config Wcmsvc start= auto
+::d sc config WinDefend start= auto
+sc config Winmgmt start= auto
+sc config WlanSvc start= auto
+::? sc config WpnUserService_* start= auto
+::d sc config wscsvc start= delayed-auto
+sc config wuauserv start= delayed-auto
+::x sc config wudfsvc start= delayed-auto
+sc config XboxGipSvc start= delayed-auto
 ECHO.
 ECHO Windows Services Changes Completed
 ECHO.
@@ -459,7 +477,7 @@ ECHO.
 
 ECHO Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
-::Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
+::alt Set HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\NetworkThrottlingIndex to 4294967295
 
 ECHO Fixing IRP stack size for better network flow - MS default is 15 for 10mbps - do not set above 32 for stability
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" /v IRPStackSize /t REG_DWORD /d 30 /f
@@ -470,6 +488,9 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 ECHO Increasing system responsiveness for Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
+ECHO Enabling Optimizations for Windowed Games
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR\Graphics" /v OptimizationsForWindowedGames /t REG_DWORD /d 1 /f
+
 ECHO Speed up shutdown time
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_DWORD /d 1000 /f
 
@@ -478,6 +499,9 @@ REG ADD "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled 
 
 ECHO Disabling the setting that allows hardware to install whatever software it wants - LG Monitor McAffee Incident
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v PreventDeviceMetadataFromNetwork /t REG_DWORD /d 1 /f
+
+
+ECHO Disabling the GameDVR 
 
 ECHO Turning off telemetry data collection Local Machine
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
@@ -538,7 +562,7 @@ REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsen
 	
 ECHO Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f	
-
+REG ADD "HKLM\SYSTEM\ControlSet001\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f
 ECHO clear page file at shutdown to remove sensitive memory remnants from "pagefile.sys" rebuilds each boot
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v ClearPageFileAtShutdown /t REG_DWORD /d 1 /f
 
@@ -561,9 +585,8 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputabl
 ECHO System level registry tweaks completed
 ECHO.
 
-:: ----------------------------------------------------------
-:: ---------Disable Microsoft Office telemetry agent---------
-:: ----------------------------------------------------------
+
+:: =======Disable Microsoft Office telemetry agent==========
 echo --- Disable Microsoft Office telemetry agent
 :: Disable scheduled task(s): `\Microsoft\Office\OfficeTelemetryAgentFallBack`
 PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Office\'; $taskNamePattern='OfficeTelemetryAgentFallBack'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
@@ -573,7 +596,6 @@ PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\
 PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Office\'; $taskNamePattern='OfficeTelemetryAgentLogOn'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
 :: Disable scheduled task(s): `\Microsoft\Office\OfficeTelemetryAgentLogOn2016`
 PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Office\'; $taskNamePattern='OfficeTelemetryAgentLogOn2016'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
-:: ----------------------------------------------------------
 
 ECHO Remove and Disable Windows Co-pilot -standard- machine wide settings
 ::Enable reg key that allows app to be uninstalled
@@ -630,6 +652,7 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnabl
 ::Disabling Scheduled Task Microsoft\Windows\Maps\MapsUpdateTask
 
 :: ==========================================PENDING SECTION END==========================================
+
 :USER-REGISTRY
 :: ===============================================================
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
@@ -664,6 +687,9 @@ REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\B
 ECHO DISABLE ALLOW WINDOWS APPS TO RUN IN THE BACKGROUND
 REG ADD "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f
 
+ECHO Enabling Game Mode which helps further reduce background system resource usage
+REG ADD "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 1 /f
+
 ECHO Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f
 
@@ -672,6 +698,7 @@ REG ADD "HKCU\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\Inpr
 
 ECHO Disable Explorer search box suggestions -Ads-
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
+
 ECHO Disabling bing search in start menu
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
@@ -697,7 +724,7 @@ REG ADD "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_DWORD /d 1 /f
 REG ADD "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\DWM" /v EnableAeroPeek /t REG_DWORD /d 0 /f
-::research this - possible webview dependency removal
+::research this - possible webview dependency removal - found all over the place - runaway webview2.exe processes
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
 
 ::ECHO Disable transparency effects - optional
@@ -765,9 +792,6 @@ ECHO Hide the meet now button on the taskbar
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v HideSCAMeetNow /t REG_DWORD /d 1 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /t REG_DWORD /d 0 /f
 
-::Allow RDP remote assistance - leave enabled for business use
-::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance" /v fAllowToGetHelp /t REG_DWORD /d 0 /f
-
 ECHO Fixing the Start Menu
 ECHO Set the searchbox taskbar to icon only for less wasted space
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f
@@ -787,21 +811,11 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExpe
 ECHO Disabling Cross-Device Resume -optional but reverse this if you sync your phone to your pc - honestly your web browser should do this - mostly web
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v IsResumeAllowed /t RED_DWORD /d 0
 
-::disable game DVR - negatively affects e-core parking - disabled this section because it negatively affects chips with CCD cache routing -X3d etc-
-::REG ADD "HKLM\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement" /v AllowGameDVR /t REG_DWORD /d 0 /f
-::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f
-::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_FSEBehavior /t REG_DWORD /d 2 /f
-::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_FSEBehaviorMode /t REG_DWORD /d 2 /f
-::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_HonorUserFSEBehaviorMode /t REG_DWORD /d 0 /f
-::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_EFSEFeatureFlags /t REG_DWORD /d 0 /f
-::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR /t REG_DWORD /d 0 /f
-
 ECHO Disable MS Co-pilot per user registry settings
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsCopilot" /v AllowCopilotRuntime /t REG_DWORD /d 0 /f
 
-:: -------------Disable Microsoft Office logging-------------
 echo --- Disable Microsoft Office logging
 reg add "HKCU\SOFTWARE\Microsoft\Office\15.0\Outlook\Options\Mail" /v "EnableLogging" /t REG_DWORD /d 0 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\16.0\Outlook\Options\Mail" /v "EnableLogging" /t REG_DWORD /d 0 /f
@@ -814,26 +828,38 @@ reg add "HKCU\SOFTWARE\Policies\Microsoft\Office\16.0\OSM" /v "EnableLogging" /t
 reg add "HKCU\SOFTWARE\Policies\Microsoft\Office\15.0\OSM" /v "EnableUpload" /t REG_DWORD /d 0 /f
 reg add "HKCU\SOFTWARE\Policies\Microsoft\Office\16.0\OSM" /v "EnableUpload" /t REG_DWORD /d 0 /f
 
-:: --------Disable Microsoft Office client telemetry---------
 echo --- Disable Microsoft Office client telemetry
 reg add "HKCU\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" /v "DisableTelemetry" /t REG_DWORD /d 1 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\ClientTelemetry" /v "DisableTelemetry" /t REG_DWORD /d 1 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" /v "VerboseLogging" /t REG_DWORD /d 0 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\ClientTelemetry" /v "VerboseLogging" /t REG_DWORD /d 0 /f
 
-
-:: Disable Microsoft Office Customer Experience Improvement Program
 echo --- Disable Microsoft Office Customer Experience Improvement Program
 reg add "HKCU\SOFTWARE\Microsoft\Office\15.0\Common" /v "QMEnable" /t REG_DWORD /d 0 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\16.0\Common" /v "QMEnable" /t REG_DWORD /d 0 /f
 
-
-:: ------------Disable Microsoft Office feedback-------------
 echo --- Disable Microsoft Office feedback
 reg add "HKCU\SOFTWARE\Microsoft\Office\15.0\Common\Feedback" /v "Enabled" /t REG_DWORD /d 0 /f
 reg add "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\Feedback" /v "Enabled" /t REG_DWORD /d 0 /f
-goto :eof
 
+
+::disable game DVR - negatively affects cpu efficiency core parking and cache use on AMD X3d chips
+::disabled this section because it negatively affects chips with CCD cache routing -X3d etc- and e-core parking when gaming
+::add logic to detect if processor has CCD cache before disbling - for now leave as is
+::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR /t REG_DWORD /d 0 /f
+::REG ADD "HKLM\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement" /v AllowGameDVR /t REG_DWORD /d 0 /f
+::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f
+::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_FSEBehavior /t REG_DWORD /d 2 /f
+::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_FSEBehaviorMode /t REG_DWORD /d 2 /f
+::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_HonorUserFSEBehaviorMode /t REG_DWORD /d 0 /f
+::REG ADD "HKCU\System\GameConfigStore" /v GameDVR_EFSEFeatureFlags /t REG_DWORD /d 0 /f
+
+::Allow RDP remote assistance - leave enabled for business use
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance" /v fAllowToGetHelp /t REG_DWORD /d 0 /f
+::goto :eof
+
+
+::***********************************************END of USER REGISTRY SETTINGS TO APPLY***********************************************
 :: ================================
 :: START
 :: ================================
@@ -917,6 +943,7 @@ echo Done. Log file: %LOGFILE%
 
 endlocal
 exit /b
+goto reboot
 
 ECHO ======================================END PENDING==========================================
 
@@ -937,31 +964,38 @@ RED ADD "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v "HWSchMode" /
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v NoLazyMode /t REG_DWORD /d 00000000 /f
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v AlwaysOn /t REG_DWORD /d 00000000 /f
 
-::echo Disabling Dynamic P-state for GPUs...
-::powershell -Command "$gpuDevices = Get-WmiObject Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'PCI\\VEN_' }; foreach ($gpu in $gpuDevices) { ::Write-Host 'Processing GPU:' $gpu.Name; $driverKey = (Get-ItemProperty \"HKLM:\SYSTEM\CurrentControlSet\Enum\$($gpu.PNPDeviceID)\" -Name 'Driver').Driver; if ::($driverKey -match '{.*}') { $regPath = \"HKLM:\SYSTEM\CurrentControlSet\Control\Class\$driverKey\"; Write-Host 'Setting registry key at:' $regPath; ::Set-ItemProperty -Path $regPath -Name 'DisableDynamicPstate' -Value 1 -Type DWord; Write-Host 'Dynamic P-state disabled successfully' } }"
-
 ::Enable Ultimate performance power plan for desktops only
 :: REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0\Attributes to 2
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e\Attributes  to 2
 
-ECHO Setting GPU priority for Full Screen Apps and Games
+::echo Disabling Dynamic P-state for GPUs...forces gpu to run at 100 and all cores enabled
+::powershell -Command "$gpuDevices = Get-WmiObject Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'PCI\\VEN_' }; foreach ($gpu in $gpuDevices) { ::Write-Host 'Processing GPU:' $gpu.Name; $driverKey = (Get-ItemProperty \"HKLM:\SYSTEM\CurrentControlSet\Enum\$($gpu.PNPDeviceID)\" -Name 'Driver').Driver; if ::($driverKey -match '{.*}') { $regPath = \"HKLM:\SYSTEM\CurrentControlSet\Control\Class\$driverKey\"; Write-Host 'Setting registry key at:' $regPath; ::Set-ItemProperty -Path $regPath -Name 'DisableDynamicPstate' -Value 1 -Type DWord; Write-Host 'Dynamic P-state disabled successfully' } }"
+
+ECHO Setting GPU priority for Full Screen Apps and Games based on Microsoft Learn Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v Priority /t REG_DWORD /d 6 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Medium /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "SFIO Priority" /t REG_SZ /d High /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Latency Sensitive" /t REG_SZ /d True /f
 
-
 ================================
 endlocal
 :REBOOT
-ECHO ALL FINISHED!
-ECHO IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
-ECHO "https://buymeacoffee.com/thebeardofl"
+ECHO ***********************
+ECHO ****************************ALL FINISHED!*******************************
+ECHO *																		*
+ECHO *		IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE		*
+ECHO *				 "https://buymeacoffee.com/thebeardofl"					*
+ECHO *																		*
+ECHO ****************************ALL FINISHED!*******************************
 ECHO.
 ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
-ECHO DO YOU WISH TO REBOOT NOW?
-::Add command for Y/N reboot
+ECHO. 
+	set /p q=A system restart is required for the changes to take effect, reboot now? [Y/N]?
+	if /I "%q%" EQU "Y" goto reboot
+	if /I "%q%" EQU "N" goto exit
+:reboot
+	shutdown -r -t 0
 ECHO.
 
 :EXIT
