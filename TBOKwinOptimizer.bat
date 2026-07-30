@@ -1,5 +1,5 @@
 ::turn off echoing all commands
-ECHO OFF
+::@ECHO OFF
 ::change the terminal color to something friendlier
 color f0
 :: Automatically check and get admin rights ::
