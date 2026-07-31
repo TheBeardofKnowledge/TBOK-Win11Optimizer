@@ -432,7 +432,7 @@ sc config iphlpsvc start= auto
 ::d sc config LSM start= auto
 sc config LanmanServer start= auto
 sc config LanmanWorkstation start= auto
-sc config MapsBroker start= delayed-auto
+::sc config MapsBroker start= delayed-auto
 ::d sc config MpsSvc start= auto
 sc config nsi start= auto
 ::? sc config OneSyncSvc_* start= auto
@@ -455,7 +455,6 @@ sc config TrkWks start= auto
 sc config tzautoupdate start= auto
 ::d sc config uhssvc start= delayed-auto
 sc config UserManager start= auto
-sc config VGAuthService start= auto
 ::x sc config VMTools start= auto
 sc config W32Time start= auto
 ::? sc config webthreatdefusersvc_* start= auto
@@ -534,7 +533,7 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v PrivacyConsentStatus 
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v Protectyourpc /t REG_DWORD /d 3 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v HideEULAPage /t REG_DWORD /d 1 /f
 
-ECHO don't use personalized lock screen with ads - MS Spotlight ads- Default 0
+ECHO Disable the lock screen which includes personalized ads - MS Spotlight ads- Default 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f
 
 ECHO =================edge tweaks=================
@@ -582,7 +581,7 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v DODow
 
 ECHO Disable Powershell telemitry
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableAIDataAnalysis /t REG_DWORD /d 1 /f
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f
+::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f
 ECHO System level registry tweaks completed
 ECHO.
 
@@ -613,9 +612,9 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat" /v IsUserEligible /t REG_DWORD /d 0 /f
 
 ECHO Removing Bing Search
-powershell -command "Get-AppxPackage -Online | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxPackage -Online"
+powershell -command "Get-AppxPackage | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxPackage"
 ECHO Depovision Bing Search across device
-powershell -command "Get-AppxProvisionedPackage | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxProvisionedPackage"
+powershell -command "Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxProvisionedPackage -Online -ErrorAction Continue"
 
 ECHO Disabling Recall in registry
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f
@@ -708,7 +707,7 @@ ECHO Enable allow Pinning more apps on the start menu for less wasted space
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
 
 ECHO Setting speed up menu show delay - Windows default is 400ms - why wait so long
-REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_DWORD /d 10 /f
+REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 10 /f
 
 ECHO Disabling some gaudi resource consuming desktop visual effects -explorer
 ECHO Setting visual effects setting to custom - other options - default 0 - 1 best appearance - 2 best performance
@@ -720,9 +719,9 @@ REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Li
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ListviewShadow /t REG_DWORD /d 1 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 0 /f
-REG ADD "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_DWORD /d 1 /f
-REG ADD "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_DWORD /d 0 /f
-REG ADD "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_DWORD /d 0 /f
+REG ADD "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_SZ /d 1 /f
+REG ADD "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f
+REG ADD "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_SZ /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\DWM" /v EnableAeroPeek /t REG_DWORD /d 0 /f
 ::research this - possible webview dependency removal - found all over the place - runaway webview2.exe processes
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
@@ -789,7 +788,7 @@ ECHO Preference- Default Explorer to open at "This PC" as default instead of the
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f
  
 ECHO Enable right-click menu to auto end tasks from taskbar 
-REG ADD "HKCU\Control Panel\Desktop" /v AutoEndTasks /t REG_DWORD /d 1 /f
+REG ADD "HKCU\Control Panel\Desktop" /v AutoEndTasks /t REG_SZ /d 1 /f
 
 ECHO disable windows feeds for users
 REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" /v EnableFeeds /t REG_DWORD /d 0 /f
@@ -806,7 +805,7 @@ ECHO Disabling Bing Search in start menu results
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
 ECHO Disabling sticky keys feature
-REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_DWORD /d 58 /f
+REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /f
 
 ECHO Disabling start menu ads method 2
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f
