@@ -173,7 +173,8 @@ ECHO If your system has more than 64GB of ram - just leave it on auto
 		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); if ($ramMB -ge 65536) { Write-Output \"Skipped: RAM=$ramMB MB (64 GB or more)\"; exit 0 }; $min = [uint32]4096; $max = [uint32]($ramMB * 2); if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; $pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; if ($pf) { Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} } else { New-CimInstancee='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} }; Write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
 	
 :SERVICES
-ECHO Update SvHost split process memory Management according to current memory size - works up to around 4TB of RAM
+ECHO Enable Modern SvHost split behaviour according to currently installed RAM - works up to around 4TB of RAM
+ECHO This change will either reduce or increase the number of svhost processes to an optimized state depending on your installed RAM
 ::This changes how many processes are grouped according to available memory - it does not reduce running processes
 	for /f %%A in ('powershell -NoProfile -Command "(Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB"') do (set MemoryKB=%%A)
 	echo Memory: %MemoryKB% KB
@@ -192,15 +193,42 @@ sc config DialogBlockingService start= Disabled
 sc config DiagTrack start= Disabled
 sc config UevAgentService start= Disabled
 sc config ssh-agent start= Disabled
+ECHO Setting sysmain service mode based on RAM and System Disk type
 ::sysmain was developed to have the system load commonly used items from mechanical drives into memory for faster processing with less wait
-::Findings Rule of thumb - sysmain should be disabled on systems with < 12GB ram - but benefits mechanical hard drive systems with RAM > 12Gb
-::sysmain runs on second boot after install and uses about 70-mb ram as a constant process 
-::add logic to autodetect and apply - for now disable as a majority benefit on modern systems
-::placeholder logic for detecting system disk Type and total memory setting as variables
-::if $ram>=12GB and $disktype is SSD or NVME = disable
-::if $ram<=12GB and $disktype is SSD or NVME = disable
-::if $ram>11GB and $disktopy isNOT SSD NVME = demand
-sc config SysMain start= disable
+::with the current speed of NVME drives - the sysmain services is practically irrelevant
+::Findings Rule of thumb - sysmain should be disabled on systems with < 12GB ram - but benefits mechanical hard drive systems with > 12Gb RAM
+ ::sysmain runs on second boot after install and uses about 70-mb ram as a constant process 
+:: powershell alternative
+::powershell -NoProfile -Command "$MemGB=((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum/1GB); $Drive=$env:SystemDrive.TrimEnd(':'); $Disk=(Get-Partition -DriveLetter $Drive | Get-Disk); $IsSSD=($Disk.MediaType -eq 'SSD'); if($IsSSD){sc.exe config SysMain start= disable} elseif(($Disk.MediaType -ne 'SSD') -and ($MemGB -gt 12)){sc.exe config SysMain start= demand}"
+
+:: Get installed memory in GB
+for /f %%A in ('powershell -NoProfile -Command "[math]::Round(((Get-CimInstance Win32_lMemory ^| Measure-Object Capacity -Sum).Sum / 1GB),0)"') do (
+    set MemoryGB=%%A
+)
+:: Detect OS drive type (NVMe, SSD, HDD)
+for /f "delims=" %%A in ('powershell -NoProfile -Command "$d=(Get-Partition -DriveLetter $env:SystemDrive.TrimEnd('':'') ^| Get-Disk); if($d.BusType -eq ''NVMe''){''NVMe''} elseif($d.MediaType -eq ''SSD''){''SSD''} else {''HDD''}"') do (
+    set DriveType=%%A
+)
+echo Memory: %MemoryGB% GB
+echo System Drive Type: %DriveType%
+
+if /I "%DriveType%"=="NVMe" (
+    echo NVMe detected. Disabling SysMain...
+    sc config SysMain start= disable
+    sc stop SysMain
+) else if /I "%DriveType%"=="SSD" (
+    echo SSD detected. Disabling SysMain...
+    sc config SysMain start= disable
+    sc stop SysMain
+) else (
+    if %MemoryGB% GTR 12 (
+        echo HDD and more than 12GB RAM. Setting SysMain to Manual...
+        sc config SysMain start= demand
+    ) else (
+        echo HDD with 12GB RAM or less. Setting SysMain to disabled...
+        sc config SysMain start= disable
+    )
+)
 
 ECHO.
 ECHO Setting non-critical per-use services to manual startup so they can still work when needed but are not auto running on startup
@@ -215,39 +243,52 @@ sc config AssignedAccessManagerSvc start= demand
 sc config AxInstSV start= demand
 sc config BDESVC start= demand
 ::? sc config BcastDVRUserService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'BcastDVRUserService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config BluetoothUserService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'BluetoothUserService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::x sc config Browser start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'Browser' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config BTAGService start= demand
 sc config bthserv start= demand
 ::? sc config CaptureService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'CaptureService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config cbdhsvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'cbdhsvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config CDPSvc start= demand
 sc config CertPropSvc start= demand
 sc config cloudidsvc start= demand
 sc config COMSysApp start= demand
 ::d sc config ClipSVC start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'ClipSVC' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config ConsentUxUserSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'ConsentUxUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config CredentialEnrollmentManagerUserSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'CredentialEnrollmentManagerUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config CscService start= demand
 ::sc config DcpSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'DcpSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config dcsvc start= demand
 sc config defragsvc start= demand
 sc config DevQueryBroker start= demand
-:: old method fails - sc config DeviceAssociationBroker_* start= demand
-::new method
+::? sc config DeviceAssociationBroker_* start= demand
 powershell.exe -NoProfile -Command "Get-Service -Name 'DeviceAssociationBroker_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config DeviceAssociationService start= demand
 sc config DeviceInstall start= demand
 ::? sc config DevicePickerUserSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'DevicePickerUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config DevicesFlowUserSvc_* start= demand
-::x sc config diagnosticshub.standardcollector.servic start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'DevicesFlowUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
+::x sc config diagnosticshub.standardcollector.service start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'diagnosticshub.standardcollector.service' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config diagsvc start= demand
 sc config DisplayEnhancementService start= demand
 sc config DmEnrollmentSvc start= demand
 sc config dmwappushservice start= demand
 sc config dot3svc start= demand
 ::d sc config DoSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'DoSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::d sc config embeddedmode start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'embeddedmode' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config fdPHost start= demand
 sc config fhsvc start= demand
 sc config hidserv start= demand
@@ -257,15 +298,20 @@ sc config edgeupdate start= demand
 sc config edgeupdatem start= demand
 sc config EFS start= demand
 ::d sc config EntAppSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'EntAppSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config FDResPub start= demand
 ::x sc config Fax start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'Fax' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config FrameServer start= demand
 sc config FrameServerMonitor start= demand
 sc config GraphicsPerfSvc start= demand
 ::x sc config HomeGroupListener start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'HomeGroupListener' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::x sc config HomeGroupProvider start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'HomeGroupProvider' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config HvHost start= demand
 ::x sc config IEEtwCollectorService start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'IEEtwCollectorService' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config IKEEXT start= demand
 sc config InstallService start= demand
 sc config IpxlatCfgSvc start= demand
@@ -276,13 +322,17 @@ sc config lmhosts start= demand
 sc config LxpSvc start= demand
 sc config McpManagementService start= demand
 ::? sc config MessagingService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'MessagingService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config MicrosoftEdgeElevationService start= demand
 ::x sc config MixedRealityOpenXRSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'MixedRealityOpenXRSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config MSDTC start= demand
 sc config MsKeyboardFilter start= demand
 sc config MSiSCSI start= demand
 ::d sc config msiserver start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'msiserver' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config NPSMSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'NPSMSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config NaturalAuthentication start= demand
 sc config NcaSvc start= demand
 sc config NcbService start= demand
@@ -290,26 +340,36 @@ sc config NcdAutoSetup start= demand
 sc config NetSetupSvc start= demand
 sc config Netman start= demand
 ::d sc config NgcCtnrSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'NgcCtnrSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::d sc config NgcSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'NgcSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config NlaSvc start= demand
 sc config netprofm start= demand
 ::x sc config p2pimsvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'p2pimsvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::x sc config p2psvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'p2psvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config P9RdrService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'P9RdrService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config PcaSvc start= demand
 sc config PeerDistSvc start= demand
 ::? sc config PenService_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'PenService_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config perceptionsimulation start= demand
 sc config PerfHost start= demand
 sc config PhoneSvc start= demand
 ::? sc config PimIndexMaintenanceSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'PimIndexMaintenanceSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config pla start= demand
 sc config PlugPlay start= demand
 ::x sc config PNRPAutoReg start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'PNRPAutoReg' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::x sc config PNRPsvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'PNRPsvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config PolicyAgent start= demand
 sc config PrintNotify start= demand
 ::? sc config PrintWorkflowUserSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'PrintWorkflowUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config PushToInstall start= demand
 sc config QWAVE start= demand
 sc config RasAuto start= demand
@@ -323,19 +383,23 @@ sc config SCardSvr start= demand
 sc config SDRSVC start= demand
 sc config seclogon start= demand
 ::d sc config SecurityHealthService start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'SecurityHealthService' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config SEMgrSvc start= demand
 ::d sc config Sense start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'Sense' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config SensorDataService start= demand
 sc config SensorService start= demand
 sc config SensrSvc start= demand
 sc config SessionEnv start= demand
 sc config SharedAccess start= demand
 ::x sc config SharedRealitySvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'SharedRealitySvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config shpamsvc start= demand
 sc config SmsRouter start= demand
 sc config smphost start= demand
 sc config SNMPTrap start= demand
 ::x sc config spectrum start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'spectrum' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config SstpSvc start= demand
 sc config SSDPSRV start= demand
 sc config StiSvc start= demand
@@ -344,23 +408,32 @@ sc config svsvc start= demand
 sc config swprv start= demand
 ::sysmain placeholder
 ::x sc config TabletInputService start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'TabletInputService' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config TapiSrv start= demand
 sc config TieringEngineService start= demand
 ::x sc config TimeBroker start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'TimeBroker' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::d sc config TimeBrokerSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'TimeBrokerSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config TokenBroker start= demand
 sc config TroubleshootingSvc start= demand
 sc config TrustedInstaller start= demand
 ::x sc config UI0Detect start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'UI0Detect' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config UdkUserSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'UdkUserSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config UmRdpService start= demand
 ::? sc config UnistoreSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'UnistoreSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 ::? sc config UserDataSvc_* start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'UserDataSvc_*' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config UsoSvc start= demand
 sc config upnphost start= demand
 ::x sc config VacSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'VacSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config vds start= demand
 ::x sc config vm3dservice start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'vm3dservice' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config vmicguestinterface start= demand
 sc config vmicheartbeat start= demand
 sc config vmickvpexchange start= demand
@@ -370,14 +443,18 @@ sc config vmictimesync start= demand
 sc config vmicvmsession start= demand
 sc config vmicvss start= demand
 ::x sc config vmvss start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'vmvss' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config VSS start= demand
 ::d sc config WaaSMedicSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'WaaSMedicSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config WalletService start= demand
 sc config WarpJITSvc start= demand
 sc config wbengine start= demand
 ::x sc config WcsPlugInService start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'WcsPlugInService' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config wcncsvc start= demand
 ::d sc config WdNisSvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'WdNisSvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config WdiServiceHost start= demand
 sc config WdiSystemHost start= demand
 sc config WebClient start= demand
@@ -389,6 +466,7 @@ sc config WerSvc start= demand
 sc config WFDSConMgrSvc start= demand
 sc config WiaRpc start= demand
 ::d sc config WinHttpAutoProxySvc start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'WinHttpAutoProxySvc' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config WinRM start= demand
 sc config wisvc start= demand
 sc config wlidsvc start= demand
@@ -401,6 +479,7 @@ sc config WpcMonSvc start= demand
 sc config WpnService start= demand
 sc config workfolderssvc start= demand
 ::x sc config WSService start= demand
+powershell.exe -NoProfile -Command "Get-Service -Name 'WSService' -ErrorAction SilentlyContinue | Set-Service -StartupType Manual"
 sc config XblAuthManager start= demand
 sc config XblGameSave start= demand
 sc config XboxNetApiSvc start= demand
@@ -966,6 +1045,11 @@ if errorlevel 1 (
 ECHO Enabling HAGS - Hardware Accelerated GPU Scheduling - will only work if supported but at least not disabled
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HWSchMode /t REG_DWORD /d 2 /f
 
+ECHO Increasing system responsiveness for Games
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
+
+ECHO Enabling Optimizations for Windowed Games
+REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR\Graphics" /v OptimizationsForWindowedGames /t REG_DWORD /d 1 /f
 ::ECHO Disable power throttling Gaming Tweak only for desktops - this will kill the battery on a laptop
 ::add detection mechanism for desktop mode or make optional choice to apply anyway.
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling /v PowerThrottlingOff /t REG_DWORD /d 1 /f
