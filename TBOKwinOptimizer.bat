@@ -170,7 +170,7 @@ ECHO If your system has more than 64GB of ram - just leave it on auto
 	::wmic pagefileset list /format:list
 	
 	::new powershell method with logic for maximum size following Best Practices
-		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); if ($ramMB -ge 65536) { Write-Output \"Skipped: RAM=$ramMB MB (64 GB or more)\"; exit 0 }; $min = [uint32]4096; $max = [uint32]($ramMB * 2); if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; $pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; if ($pf) { Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} } else { New-CimInstancee='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} }; Write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
+		powershell -NoProfile -Command "$ramMB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); if ($ramMB -ge 65536) { Write-Output \"Skipped: RAM=$ramMB MB (64 GB or more)\"; exit 0 }; $min = [uint32]4096; $max = [uint32]($ramMB * 2); if ($max -lt $min) { $max = $min }; Set-CimInstance -Query \"SELECT * FROM Win32_ComputerSystem\" -Property @{AutomaticManagedPageFile=$false}; $pf = Get-CimInstance Win32_PageFileSetting -Filter \"Name='C:\\\\pagefile.sys'\"; if ($pf) { Set-CimInstance -InputObject $pf -Property @{InitialSize=[uint32]$min; MaximumSize=[uint32]$max} } else { New-CimInstance='C:\\\\pagefile.sys'; InitialSize=[uint32]$min; MaximumSize=[uint32]$max} }; Write-Output \"Configured: RAM=$ramMB MB, Min=$min MB, Max=$max MB\""
 	
 :SERVICES
 ECHO Enable Modern SvHost split behaviour according to currently installed RAM - works up to around 4TB of RAM
@@ -592,9 +592,9 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 
-ECHO Disabling Wi-Fi Sense through registry
-REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
-REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
+::ECHO Wi-Fi Sense Disable affects devices autoconnecting - leaving enabled
+::REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
+::REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
 
 ::ECHO Disable WAP Push Message Routing Service - Found Required for Enterprise MDM - excluding
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t REG_DWORD /d 00000004 /f
@@ -695,6 +695,11 @@ powershell -command "Get-AppxPackage | Where-Object DisplayName -like '*Microsof
 ECHO Depovision Bing Search across device
 powershell -command "Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxProvisionedPackage -Online -ErrorAction Continue"
 
+ECHO Removing Taskbar Widgets that should have died with Vista because now they run an entire chromium browser process
+powershell -command "Get-Process *Widget* | Stop-Process"
+powershell -command "Get-AppxPackage Microsoft.WidgetsPlatformRuntime -AllUsers | Remove-AppxPackage -AllUsers"
+powershell -command "Get-AppxPackage MicrosoftWindows.Client.WebExperience -AllUsers | Remove-AppxPackage -AllUsers"
+	  
 ECHO Disabling Recall in registry
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f
 
