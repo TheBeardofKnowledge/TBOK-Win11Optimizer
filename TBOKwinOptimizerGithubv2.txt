@@ -55,7 +55,6 @@ exit /b
 echo %~1
 >>"%LOGFILE%" echo [%DATE% %TIME%] %~1
 exit /b
-
 ::::::::::::end script helper objects::::::::::
 
 
@@ -94,6 +93,10 @@ if errorlevel 1 goto :SystemTweaks
 
 
 :SYSTEMTWEAKS
+call :LOG Detected:
+call :LOG ver
+call :LOG systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+
 :restorepoint
 call :LOG Before anything is modified - create system restore point
 call :LOG Checking if System Restore is enabled...
@@ -813,7 +816,7 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnabl
 ::optional LMS AMT-vPro Environment disable
 ::call :LOG Disable LMS1 AKA Intel vPro system
 ::Stopping and disabling service: LMS
-::powershell.exe -NoProfile -Command "Get-Service -Name 'lms' -ErrorAction SilentlyContinue | Set-Service -StartupType Disabled"
+::powershell.exe -NoProfile -Command "$svc = Get-Service LMS -ErrorAction SilentlyContinue; if($svc){  Stop-Service LMS -Force -ErrorAction SilentlyContinue;  Set-Service LMS -StartupType Disabled }"
 ::Removing service: LMS
 ::Remove LMS driver packages
 ::Remove driver package: lms.inf_amd64_3e015d10576493ca
