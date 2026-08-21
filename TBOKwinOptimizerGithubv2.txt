@@ -18,7 +18,6 @@ ECHO No changes are being made at this time.
 cls	
 ::enable extended script logic and variable holding
 setlocal enableextensions enabledelayedexpansion
-goto menu
 
 ::::::::::::begin script helper objects::::::::::
 ::Log stored in current script directory
@@ -52,11 +51,11 @@ exit /b
 ::LOG and echo helper to avoid duplicate lines in script
 ::usage call :LOG "message to echo"
 :LOG 
-echo %~1
->>"%LOGFILE%" echo [%DATE% %TIME%] %~1
+echo(%~1
+>>"%LOGFILE%" echo([%DATE% %TIME%] %*
 exit /b
 ::::::::::::end script helper objects::::::::::
-
+goto menu
 
 :MENU
 TITLE TBOK Windows Performance Optimizer
@@ -94,8 +93,8 @@ if errorlevel 1 goto :SystemTweaks
 
 :SYSTEMTWEAKS
 call :LOG Detected:
-call :LOG ver
-call :LOG systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+ver >> "%LOGFILE%"
+call :LOG systeminfo | findstr /B /C:"OS Name" /C:"OS Version" >> "%LOGFILE%"
 
 :restorepoint
 call :LOG Before anything is modified - create system restore point
@@ -209,7 +208,8 @@ call :LOG Optimizing windows virtual memory settings to prevent system hangs on 
 powershell.exe -NoProfile -Command ^
 "try { ^
     $ramMB = :Round(
-	(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB); ^
+    (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB
+	)
     Write-Output ('Detected RAM: ' + $ramMB + ' MB'); ^
     if ($ramMB -ge 32768) { ^
         Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$true} | Out-Null; ^
@@ -264,12 +264,12 @@ call :LOG Disabling services that are not used or should be disabled
 call :LOG.
 ::AllJoin service not in windows 11pro-ent-ltsc
 ::sc config AJRouter start= Disabled
-call :SerServiceDisabled AppVClient
-call :SerServiceDisabled NetTcpPortSharing
-call :SerServiceDisabled DialogBlockingService
-call :SerServiceDisabled DiagTrack
-call :SerServiceDisabled UevAgentService
-call :SerServiceDisabled ssh-agent
+call :SetServiceDisabled AppVClient
+call :SetServiceDisabled NetTcpPortSharing
+call :SetServiceDisabled DialogBlockingService
+call :SetServiceDisabled DiagTrack
+call :SetServiceDisabled UevAgentService
+call :SetServiceDisabled ssh-agent
 call :LOG Setting sysmain service mode based on RAM and System Disk type
 ::sysmain was developed to have the system load commonly used items from mechanical drives into memory for faster processing with less wait
 ::with the current speed of NVME drives - the sysmain services is practically irrelevant
@@ -289,19 +289,19 @@ call :LOG System Drive Type: %DriveType%
 
 if /I "%DriveType%"=="NVMe" (
     call :LOG NVMe detected. Disabling SysMain...
-    call :SerServiceDisabled SysMain
+    call :SetServiceDisabled SysMain
     sc stop SysMain
 ) else if /I "%DriveType%"=="SSD" (
     call :LOG SSD detected. Disabling SysMain...
-    call :SerServiceDisabled SysMain
+    call :SetServiceDisabled SysMain
     sc stop SysMain
 ) else (
     if %MemoryGB% GTR 12 (
         call :LOG HDD and more than 12GB RAM detected. Setting SysMain to start on demand
-        call :SerServiceManual SysMain
+        call :SetServiceManual SysMain
     ) else (
         call :LOG HDD with 12GB RAM or less. Setting SysMain to disabled...
-        call :SerServiceDisabled SysMain
+        call :SetServiceDisabled SysMain
     )
 )
 
@@ -787,7 +787,6 @@ call :LOG Remove and Disable Windows Co-pilot -standard- machine wide settings
 ::Enable reg key that allows app to be uninstalled
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f
 call :LOG Removing existing Co-Pilot installed package
-powershell -command "Get-AppxPackage | Where-Object DisplayName -like '*Microsoft.Copilot*' | Remove-AppxPackage"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$pkg = Get-AppxPackage *Microsoft.Copilot* -ErrorAction SilentlyContinue; if($pkg){$pkg | Remove-AppxPackage}"
 call :LOG Deprovisioning standard MS Co-Pilot across device
 powershell -command "Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '*Microsoft.Copilot*' | Remove-AppxProvisionedPackage -Online"
@@ -1203,8 +1202,8 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 		::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0" /v Attributes /t REG_DWORD /d 2 /f
 		::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e" /v Attributes /t REG_DWORD /d 2 /f
 
-::call :LOG Disabling Dynamic P-state for GPUs...forces gpu to run at 100 and all cores enabled
-		powershell -Command "$gpuDevices = Get-WmiObject Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'PCI\\VEN_' }; foreach ($gpu in $gpuDevices) { ::Write-Host 'Processing GPU:' $gpu.Name; $driverKey = (Get-ItemProperty \"HKLM:\SYSTEM\CurrentControlSet\Enum\$($gpu.PNPDeviceID)\" -Name 'Driver').Driver; if ::($driverKey -match '{.*}') { $regPath = \"HKLM:\SYSTEM\CurrentControlSet\Control\Class\$driverKey\"; Write-Host 'Setting registry key at:' $regPath; ::Set-ItemProperty -Path $regPath -Name 'DisableDynamicPstate' -Value 1 -Type DWord; Write-Host 'Dynamic P-state disabled successfully' } }"
+call :LOG Disabling Dynamic P-state for GPUs...forces gpu to run at 100 and all cores enabled
+		powershell -Command "$gpuDevices = Get-WmiObject Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'PCI\\VEN_' }; foreach ($gpu in $gpuDevices) { Write-Host 'Processing GPU:' $gpu.Name; $driverKey = (Get-ItemProperty \"HKLM:\SYSTEM\CurrentControlSet\Enum\$($gpu.PNPDeviceID)\" -Name 'Driver').Driver; if ($driverKey -match '{.*}') { $regPath = \"HKLM:\SYSTEM\CurrentControlSet\Control\Class\$driverKey\"; Write-Host 'Setting registry key at:' $regPath; New-ItemProperty -Path $regPath -Name 'DisableDynamicPstate' -PropertyType DWord -Value 1 -Force; Write-Host 'Dynamic P-state disabled successfully' } }"
 		goto REBOOT
 	:unknownchassis
 	call :LOG Unable to determine chassis type. Skipped power tweaks.
