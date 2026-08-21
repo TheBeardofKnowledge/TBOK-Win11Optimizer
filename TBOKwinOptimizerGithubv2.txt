@@ -52,8 +52,8 @@ exit /b
 ::LOG and echo helper to avoid duplicate lines in script
 ::usage call :LOG "message to echo"
 :LOG 
-echo(%~1
->>"%LOGFILE%" echo([%DATE% %TIME%] %~1
+echo %~1
+>>"%LOGFILE%" echo [%DATE% %TIME%] %~1
 exit /b
 
 ::::::::::::end script helper objects::::::::::
@@ -95,52 +95,67 @@ if errorlevel 1 goto :SystemTweaks
 
 :SYSTEMTWEAKS
 :restorepoint
-ECHO Before anything is modified - create system restore point
-ECHO Checking if System Restore is enabled...
+call :LOG Before anything is modified - create system restore point
+call :LOG Checking if System Restore is enabled...
 	reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v RPSessionInterval
 	if !errorlevel! equ 0 (
-    ECHO System Restore is enabled - checking required services...
+    call :LOG System Restore is enabled - checking required services...
     
     :: Check if Volume Shadow Copy service is running
     sc query vss | find "RUNNING"
     if !errorlevel! neq 0 (
-        ECHO Starting Volume Shadow Copy service...
+        call :LOG Starting Volume Shadow Copy service...
         net start vss
         timeout /t 2 /nobreak >nul
     )
     :: Allow creating restore points more frequently than 24 hours
-ECHO Ensuring restore point can be created immediately
+call :LOG Ensuring restore point can be created immediately
     REG ADD "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f
     :: Wait for registry change to take effect
     timeout /t 2 /nobreak >nul
-ECHO Enabling system restore feature on system drive
+call :LOG Enabling system restore feature on system drive
   PowerShell -ExecutionPolicy Bypass -Command "if (-not (Get-ComputerRestorePoint -ErrorAction SilentlyContinue)) {Enable-ComputerRestore -Drive ($env:SystemDrive + '\') }"
-ECHO Creating restore point...
+::  [
+::      "
+::      if (-not (Get-ComputerRestorePoint)) {
+::          Enable-ComputerRestore -Drive $Env:SystemDrive
+::      }
+
+::      Checkpoint-Computer -Description \"System Restore Point created by WinUtil\" -RestorePointType MODIFY_SETTINGS
+::      Write-Host \"System Restore Point Created Successfully\" -ForegroundColor Green
+::      "
+::  ]
+call :LOG Creating restore point...
     PowerShell -ExecutionPolicy RemoteSigned -Command "try { Checkpoint-Computer -Description 'Status Before TBOK Windows Optimizer' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; exit 0 } catch { exit 1 }"
     if !errorlevel! equ 0 (
-        ECHO Restore point created successfully.
-        ECHO "Restore point created successfully"
+        call :LOG Restore point created successfully.
+        call :LOG "Restore point created successfully"
     ) else (
-        ECHO WARNING: Could not create restore point.
-        ECHO This may be due to:
-        ECHO  - System Protection is disabled for the system drive
-        ECHO  - Volume Shadow Copy service issues
-        ECHO  - Insufficient disk space
-        ECHO.
-        ECHO The script can continue without a restore point but use at your own risk
-        ECHO "WARNING: Restore point creation failed"
-		ECHO Either continue at your own risk or go manually create a restore point before proceeding
+        call :LOG WARNING: Could not create restore point.
+        call :LOG This may be due to:
+        call :LOG  - System Protection is disabled for the system drive
+        call :LOG  - Volume Shadow Copy service issues
+        call :LOG  - Insufficient disk space
+        call :LOG.
+        call :LOG The script can continue without a restore point but use at your own risk
+        call :LOG "WARNING: Restore point creation failed"
+		call :LOG Either continue at your own risk or go manually create a restore point before proceeding
         pause
     )
 ) else (
-    ECHO "Found System Restore is disabled for system drive - restore point skipped"
+    call :LOG "Found System Restore is disabled for system drive - restore point skipped"
 )
+:RegistryBackup
+call :LOG Creating a separate registry backup just in case
+reg export HKLM "%~dp0TBOK-HKLM-Registry-Backup.reg" /y >nul
+reg export HKCU "%~dp0TBOK-HKCU-Registry-Backup.reg" /y >nul
+call :LOG Registry backed up and saved to script folder
 
-ECHO.
-ECHO Starting selected changes
-ECHO.
+call :LOG.
+call :LOG Starting selected changes
+call :LOG.
 :hibernation
-ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for desktops - especially with SSD system drives
+call :LOG Setting Hibernation Mode based on PC chassis type - should be disabled for desktops - especially with SSD system drives
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
 ::	1. Most modern PC's come with an SSD or m2 NVME drive and fast startup is not required as it was made to improve performance for systems with slower spinning disks
 ::	2. Hybrid shutdown/hibernation/fast startup often causes Windows Updates to NOT install properly.
@@ -164,25 +179,25 @@ ECHO Setting Hibernation Mode based on PC chassis type - should be disabled for 
 		if /i "%Type%"=="Desktop" goto desktop
 		goto unknownchassis
 	:laptop
-		ECHO Laptop detected - enabled hibernation "fast startup" mode
+		call :LOG Laptop detected - enabled hibernation "fast startup" mode
 		powercfg -h on
 		goto f8startup
 	:desktop
-		ECHO Desktop detected - disabled hibernation "fast startup" mode
+		call :LOG Desktop detected - disabled hibernation "fast startup" mode
 		powercfg -h off
 		goto f8startup
 	:unknownchassis
-	ECHO Unable to determine chassis type. Hibernation was not changed.
-	ECHO.
+	call :LOG Unable to determine chassis type. Hibernation was not changed.
+	call :LOG.
 	
 :F8startup
-ECHO Restoring the much beloved F8 Startup menu availability - WHY TF DID THEY REMOVE THAT
+call :LOG Restoring the much beloved F8 Startup menu availability - WHY TF DID THEY REMOVE THAT
 ::This is optional to enable - Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
 ::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu - be aware
 bcdedit /set {default} bootmenupolicy legacy
 
 :virtualmemory
-ECHO Optimizing windows virtual memory settings to prevent system hangs on low memory conditions due to SwapFile expansion delay
+call :LOG Optimizing windows virtual memory settings to prevent system hangs on low memory conditions due to SwapFile expansion delay
 :: On low ram systems <16GB - Windows keeps the auto mode current allocation too low IMO
 :: This can cause system lag-hang conditions while it expands the swap file because it filled up too soon
 :: Tests have found that a minimum of 4096 or prefered 8192 is an optimal start - and max size should be double that up to a point
@@ -232,18 +247,18 @@ powershell.exe -NoProfile -Command ^
 ::    sc config DialogBlockingService start= disabled
 ::)
 
-ECHO Enable Modern SvHost split behaviour according to currently installed RAM - works up to around 4TB of RAM
-ECHO This change the svhost process grouping to an optimized state based on your installed RAM
+call :LOG Enable Modern SvHost split behaviour according to currently installed RAM - works up to around 4TB of RAM
+call :LOG This change the svhost process grouping to an optimized state based on your installed RAM
 ::This changes how many processes are grouped according to available memory - it does not actually reduce running processes
 	for /f %%A in ('powershell -NoProfile -Command "(Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB"') do (set MemoryKB=%%A)
-	echo Memory: %MemoryKB% KB
+	call :LOG Memory: %MemoryKB% KB
 	REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d %MemoryKB% /f
 
-ECHO.
-ECHO Setting Unecessary Windows Services to Optimized State
-ECHO.
-ECHO Disabling services that are not used or should be disabled
-ECHO.
+call :LOG.
+call :LOG Setting Unecessary Windows Services to Optimized State
+call :LOG.
+call :LOG Disabling services that are not used or should be disabled
+call :LOG.
 ::AllJoin service not in windows 11pro-ent-ltsc
 ::sc config AJRouter start= Disabled
 call :SerServiceDisabled AppVClient
@@ -252,7 +267,7 @@ call :SerServiceDisabled DialogBlockingService
 call :SerServiceDisabled DiagTrack
 call :SerServiceDisabled UevAgentService
 call :SerServiceDisabled ssh-agent
-ECHO Setting sysmain service mode based on RAM and System Disk type
+call :LOG Setting sysmain service mode based on RAM and System Disk type
 ::sysmain was developed to have the system load commonly used items from mechanical drives into memory for faster processing with less wait
 ::with the current speed of NVME drives - the sysmain services is practically irrelevant
 ::Findings Rule of thumb - sysmain should be disabled on systems with < 12GB ram - but benefits mechanical hard drive systems with > 12Gb RAM
@@ -266,31 +281,31 @@ for /f %%A in ('powershell -NoProfile -Command "[math]::Round(((Get-CimInstance 
 for /f "delims=" %%A in ('powershell -NoProfile -Command "$d=(Get-Partition -DriveLetter $env:SystemDrive.TrimEnd('':'') ^| Get-Disk); if($d.BusType -eq ''NVMe''){''NVMe''} elseif($d.MediaType -eq ''SSD''){''SSD''} else {''HDD''}"') do (
     set DriveType=%%A
 )
-echo Memory: %MemoryGB% GB
-echo System Drive Type: %DriveType%
+call :LOG Memory: %MemoryGB% GB
+call :LOG System Drive Type: %DriveType%
 
 if /I "%DriveType%"=="NVMe" (
-    echo NVMe detected. Disabling SysMain...
+    call :LOG NVMe detected. Disabling SysMain...
     call :SerServiceDisabled SysMain
     sc stop SysMain
 ) else if /I "%DriveType%"=="SSD" (
-    echo SSD detected. Disabling SysMain...
+    call :LOG SSD detected. Disabling SysMain...
     call :SerServiceDisabled SysMain
     sc stop SysMain
 ) else (
     if %MemoryGB% GTR 12 (
-        echo HDD and more than 12GB RAM detected. Setting SysMain to start on demand
+        call :LOG HDD and more than 12GB RAM detected. Setting SysMain to start on demand
         call :SerServiceManual SysMain
     ) else (
-        echo HDD with 12GB RAM or less. Setting SysMain to disabled...
+        call :LOG HDD with 12GB RAM or less. Setting SysMain to disabled...
         call :SerServiceDisabled SysMain
     )
 )
 
-ECHO.
-ECHO Setting non-critical per-use services to manual startup so they can still work when needed but are not auto running on startup
-ECHO Many of these are manual by default anyway so some of this process is just to restore that behaviour in case something changed them
-ECHO.
+call :LOG.
+call :LOG Setting non-critical per-use services to manual startup so they can still work when needed but are not auto running on startup
+call :LOG Many of these are manual by default anyway so some of this process is just to restore that behaviour in case something changed them
+call :LOG.
 sc config ALG start= demand
 sc config AppIDSvc start= demand
 sc config AppMgmt start= demand
@@ -541,10 +556,10 @@ sc config XblAuthManager start= demand
 sc config XblGameSave start= demand
 sc config XboxNetApiSvc start= demand
 
-ECHO.
-ECHO Ensuring required services are set to auto State
-ECHO This is just in case you used a previous utility that set the services incorrectly
-ECHO.
+call :LOG.
+call :LOG Ensuring required services are set to auto State
+call :LOG This is just in case you used a previous utility that set the services incorrectly
+call :LOG.
 sc config AudioEndpointBuilder start= auto
 sc config AudioSrv start= auto
 ::d sc config BFE start= auto
@@ -627,41 +642,41 @@ sc config wuauserv start= delayed-auto
 ::x sc config wudfsvc start= delayed-auto
 powershell.exe -NoProfile -Command "Get-Service -Name 'wudfsvc' -ErrorAction SilentlyContinue | Set-Service -StartupType AutomaticDelayedStart"
 sc config XboxGipSvc start= delayed-auto
-ECHO.
-ECHO Windows Services Changes Completed
-ECHO.
+call :LOG.
+call :LOG Windows Services Changes Completed
+call :LOG.
 
 :machine-wide-registry
-ECHO Enabling System-wide Registry Improvements
-ECHO.
+call :LOG Enabling System-wide Registry Improvements
+call :LOG.
 
-ECHO Disabling network throttling
+call :LOG Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
 ::alt REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f
 
-ECHO Fixing IRP stack size for better network flow - MS default is 15 for 10mbps - do not set above 32 for stability
+call :LOG Fixing IRP stack size for better network flow - MS default is 15 for 10mbps - do not set above 32 for stability
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" /v IRPStackSize /t REG_DWORD /d 30 /f
 
-ECHO Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
+call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
-ECHO Speed up shutdown time
+call :LOG Speed up shutdown time
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_SZ /d 5000 /f
 
-ECHO Enabling long file system path support - FR though -why is this disabled by default Microsoft
+call :LOG Enabling long file system path support - FR though -why is this disabled by default Microsoft
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 
-ECHO Disabling the setting that allows hardware to install whatever software it wants - LG Monitor McAffee Incident
+call :LOG Disabling the setting that allows hardware to install whatever software it wants - LG Monitor McAffee Incident
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v PreventDeviceMetadataFromNetwork /t REG_DWORD /d 1 /f 
 
-ECHO Disable Webview dependency for Search - breaks nothing - puts search back into classic mode
+call :LOG Disable Webview dependency for Search - breaks nothing - puts search back into classic mode
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledState /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledStateOptions /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v Variant /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v VarianPayload /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v VarianPayloadKind  /t REG_DWORD /d 0 /f
 
-ECHO Turning off telemetry data collection Local Machine
+call :LOG Turning off telemetry data collection Local Machine
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f
@@ -673,18 +688,18 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 
-::ECHO Wi-Fi Sense Disable affects devices autoconnecting - leaving enabled
+::call :LOG Wi-Fi Sense Disable affects devices autoconnecting - leaving enabled
 ::REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
 ::REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisenseopen /t REG_DWORD /d 0 /f
 
-::ECHO Disable WAP Push Message Routing Service - Found Required for Enterprise MDM - excluding
+::call :LOG Disable WAP Push Message Routing Service - Found Required for Enterprise MDM - excluding
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\dmwappushservice" /v start /t REG_DWORD /d 00000004 /f
 
-ECHO Enable verbose logon-off status on shutdown screen -optional but helpful
+call :LOG Enable verbose logon-off status on shutdown screen -optional but helpful
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v VerboseStatus /t REG_DWORD /d 1 /f
 
 ::this section might not apply - testing needed
-ECHO Disable privacy settings experience at first OOBE logon
+call :LOG Disable privacy settings experience at first OOBE logon
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v DisablePrivacyExperience /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v SkipMachineOOBE /t REG_DWORD /d 1 /f
@@ -693,27 +708,27 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v PrivacyConsentStatus 
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v Protectyourpc /t REG_DWORD /d 3 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v HideEULAPage /t REG_DWORD /d 1 /f
 
-ECHO Disable the lock screen which includes personalized ads - MS Spotlight ads- Default 0
+call :LOG Disable the lock screen which includes personalized ads - MS Spotlight ads- Default 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f
 
-ECHO Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
+call :LOG Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
 REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 	
-ECHO Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
+call :LOG Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f	
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FirmwareResources" /v WPBT /t REG_BINARY /d 0 /f
 
 ::For system hardening only - sometimes slows shutdown time
-::ECHO clear page file at shutdown to remove sensitive memory remnants from pagefile.sys - rebuilds each boot
+::call :LOG clear page file at shutdown to remove sensitive memory remnants from pagefile.sys - rebuilds each boot
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v ClearPageFileAtShutdown /t REG_DWORD /d 1 /f
 
-ECHO Fix Network Data Usage Graph not working
+call :LOG Fix Network Data Usage Graph not working
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\Ndu" /v Start /t REG_DWORD /d 2 /f
 
 :systemtelemitry
-ECHO ==Disable Windows System Telemetry==
+call :LOG ==Disable Windows System Telemetry==
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications  /t REG_DWORD /d 1 /f
@@ -722,38 +737,38 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" /v Disabled  /
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config" /v DODownloadMode /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v DODownloadMode /t REG_DWORD /d 0 /f
 
-ECHO Disable Powershell telemitry
+call :LOG Disable Powershell telemitry
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableAIDataAnalysis /t REG_DWORD /d 1 /f
 ::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f
-ECHO System level registry tweaks completed
-ECHO.
+call :LOG System level registry tweaks completed
+call :LOG.
 
-::ECHO Disable GameDVR - not recommended on AMD X3d chips due to CCD cache routing
+::call :LOG Disable GameDVR - not recommended on AMD X3d chips due to CCD cache routing
 ::REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR\AllowGameDVR /t REG_DWORD /d 0 /f
 ::REG ADD "HKLM\SOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement" /v AllowGameDVR /t REG_DWORD /d 0 /f
 
-ECHO =================edge tweaks=================
-ECHO Disable Edge so-called start boost - Edge runs on startup even if you dont use it
+call :LOG =================edge tweaks=================
+call :LOG Disable Edge so-called start boost - Edge runs on startup even if you dont use it
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v StartupBoostEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disable exhaustive Edge first run experience
+call :LOG Disable exhaustive Edge first run experience
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v HideFirstRunExperience /t REG_DWORD /d 1 /f
 
-ECHO Disabling submit user feedback because Microsoft does not actually listen - worthless
+call :LOG Disabling submit user feedback because Microsoft does not actually listen - worthless
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v UserFeedbackAllowed /t REG_DWORD /d 0 /f
 
-ECHO Disabling shopping assistant ads
+call :LOG Disabling shopping assistant ads
 REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
 
-::ECHO Disabling gamer mode for Edge so it doesnt monitor your active applications
-::ECHO While this serves to lower resource usage for the browser - it also monitors everything running
+::call :LOG Disabling gamer mode for Edge so it doesnt monitor your active applications
+::call :LOG While this serves to lower resource usage for the browser - it also monitors everything running
 ::REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v GamerModeEnabled /t REG_DWORD /d 0 /f
 
-ECHO ===============end edge tweaks=================
+call :LOG ===============end edge tweaks=================
 
 
 :: =======Disable Microsoft Office telemetry agent==========
-echo --- Disable Microsoft Office telemetry agent
+call :LOG --- Disable Microsoft Office telemetry agent
 :: Disable scheduled task(s): `\Microsoft\Office\OfficeTelemetryAgentFallBack`
 PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Office\'; $taskNamePattern='OfficeTelemetryAgentFallBack'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
 :: Disable scheduled task(s): `\Microsoft\Office\OfficeTelemetryAgentFallBack2016`
@@ -763,39 +778,40 @@ PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\
 :: Disable scheduled task(s): `\Microsoft\Office\OfficeTelemetryAgentLogOn2016`
 PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Office\'; $taskNamePattern='OfficeTelemetryAgentLogOn2016'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
 
-ECHO Time for some bloat removal
-ECHO.
-ECHO Remove and Disable Windows Co-pilot -standard- machine wide settings
+call :LOG Time for some bloat removal
+call :LOG.
+call :LOG Remove and Disable Windows Co-pilot -standard- machine wide settings
 ::Enable reg key that allows app to be uninstalled
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f
-ECHO Removing existing Co-Pilot installed package
+call :LOG Removing existing Co-Pilot installed package
 powershell -command "Get-AppxPackage | Where-Object DisplayName -like '*Microsoft.Copilot*' | Remove-AppxPackage"
-ECHO Deprovisioning standard MS Co-Pilot across device
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$pkg = Get-AppxPackage *Microsoft.Copilot* -ErrorAction SilentlyContinue; if($pkg){$pkg | Remove-AppxPackage}"
+call :LOG Deprovisioning standard MS Co-Pilot across device
 powershell -command "Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '*Microsoft.Copilot*' | Remove-AppxProvisionedPackage -Online"
 powershell -command "Get-AppxPackage -AllUsers | Where-Object {$_.Name -Like '*Microsoft.Copilot*'} | Remove-AppxPackage -AllUsers -ErrorAction Continue"
-ECHO adding keys to ensure it does not get reinstalled by marking device incompatible
+call :LOG adding keys to ensure it does not get reinstalled by marking device incompatible
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot" /v IsCopilotAvailable /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot" /v CopilotDisabledReason /t REG_SZ /d "IsEnabledForGeographicRegionFailed" /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked" /v "{CB3B0003-8088-4EDE-8769-8B354AB2FF8C}" /t REG_SZ /d 1 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat" /v IsUserEligible /t REG_DWORD /d 0 /f
 
-ECHO Removing Bing Search
+call :LOG Removing Bing Search
 powershell -command "Get-AppxPackage | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxPackage"
-ECHO Depovision Bing Search across device
+call :LOG Depovision Bing Search across device
 powershell -command "Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like '*Microsoft.BingSearch*' | Remove-AppxProvisionedPackage -Online -ErrorAction Continue"
 
-ECHO Removing Taskbar Widgets that should have died with Vista because now they run an entire chromium browser process
+call :LOG Removing Taskbar Widgets that should have died with Vista because now they run an entire chromium browser process
 powershell -command "Get-Process *Widget* | Stop-Process"
 powershell -command "Get-AppxPackage Microsoft.WidgetsPlatformRuntime -AllUsers | Remove-AppxPackage -AllUsers"
 powershell -command "Get-AppxPackage MicrosoftWindows.Client.WebExperience -AllUsers | Remove-AppxPackage -AllUsers"
 	  
-ECHO Disabling Recall in registry
+call :LOG Disabling Recall in registry
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f
 
 :: ___________________________________________PENDING SECTION START___________________________________________
 
 ::optional LMS AMT-vPro Environment disable
-::ECHO Disable LMS1 AKA Intel vPro system
+::call :LOG Disable LMS1 AKA Intel vPro system
 ::Stopping and disabling service: LMS
 ::powershell.exe -NoProfile -Command "Get-Service -Name 'lms' -ErrorAction SilentlyContinue | Set-Service -StartupType Disabled"
 ::Removing service: LMS
@@ -821,6 +837,8 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnabl
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\StartupAppTask
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\PcaPatchDbTask
 ::Disabling Scheduled Task Microsoft\Windows\Maps\MapsUpdateTask
+
+
 ___________________________________________PENDING SECTION END___________________________________________
 
 :USERTWEAKS
@@ -842,45 +860,45 @@ if errorlevel 1 call :Log ERROR setting DisableSearchBoxSuggestions for %BASE%
 
 
 ::***********************************************USER HKLM REGISTRY KEYS*******************************************
-ECHO.
-ECHO ==================== Begin per-user level tweaks =======================
-ECHO.
+call :LOG.
+call :LOG ==================== Begin per-user level tweaks =======================
+call :LOG.
 
-ECHO Disabling sticky keys feature
+call :LOG Disabling sticky keys feature
 REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /f
 
-ECHO Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
+call :LOG Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
 REG DEL "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
 REG ADD "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /v FolderType /t REG_SZ /d NotSpecified /f
 
-ECHO Preference- Default Explorer to open at "This PC" as default instead of the quick menu - faster opt --2 is default quick access - and 3 is downloads
+call :LOG Preference- Default Explorer to open at "This PC" as default instead of the quick menu - faster opt --2 is default quick access - and 3 is downloads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f
 
-ECHO Disabling allowing Windows apps to run in the background systemwide
+call :LOG Disabling allowing Windows apps to run in the background systemwide
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f
 
-ECHO Enabling Game Mode always on which helps further reduce background system resource usage
+call :LOG Enabling Game Mode always on which helps further reduce background system resource usage
 REG ADD "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 1 /f
 
-ECHO Preference -Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
+call :LOG Preference -Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v TaskbarEndTask /t REG_DWORD /d 1 /f
 
-ECHO Preference -Enabling show full right-click context menus in Windows 11
+call :LOG Preference -Enabling show full right-click context menus in Windows 11
 REG ADD "HKCU\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f
 
-ECHO Disabling bing search in start menu -keep the start menu local
+call :LOG Disabling bing search in start menu -keep the start menu local
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
-ECHO Enable allow Pinning more apps on the start menu for less wasted space -such a big start menu
+call :LOG Enable allow Pinning more apps on the start menu for less wasted space -such a big start menu
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_Layout /t REG_DWORD /d 1 /f
 
-ECHO Setting speed up menu show delay - Windows default is 400ms - why wait so long
+call :LOG Setting speed up menu show delay - Windows default is 400ms - why wait so long
 REG ADD "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 10 /f
 
-ECHO Disabling some gaudi resource consuming desktop visual effects -explorer
-ECHO Setting visual effects setting to custom - other options - default 0 - 1 best appearance - 2 best performance
+call :LOG Disabling some gaudi resource consuming desktop visual effects -explorer
+call :LOG Setting visual effects setting to custom - other options - default 0 - 1 best appearance - 2 best performance
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 3 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAnimations /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAI /t REG_DWORD /d 0 /f
@@ -896,55 +914,55 @@ REG ADD "HKCU\Software\Microsoft\Windows\DWM" /v EnableAeroPeek /t REG_DWORD /d 
 ::research this - possible webview dependency removal - found all over the place - runaway webview2.exe processes
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v WebView /t REG_DWORD /d 0 /f
 
-::ECHO Disable transparency effects - optional - left enabled for WindHawk TransparentTB and WallpaperEngine
+::call :LOG Disable transparency effects - optional - left enabled for WindHawk TransparentTB and WallpaperEngine
 ::REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f 
 
 :advertising
-ECHO Start Disabling User level ads in Windows
-ECHO.
+call :LOG Start Disabling User level ads in Windows
+call :LOG.
 
-ECHO Disable Explorer search box suggestions -Ads-
+call :LOG Disable Explorer search box suggestions -Ads-
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f
 
-ECHO Disabling file explorer ads
+call :LOG Disabling file explorer ads
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSyncProviderNotifications /t REG_DWORD /d 0 /f
 
-ECHO Disable reocurring finish setup ads named "Suggest ways to get the most out of Windows"
+call :LOG Disable reocurring finish setup ads named "Suggest ways to get the most out of Windows"
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling lock screen tips and ads
+call :LOG Disabling lock screen tips and ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v RotatingLockScreenOverlayEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling personalized ads
+call :LOG Disabling personalized ads
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling welcome experience ads
+call :LOG Disabling welcome experience ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-310093Enabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling settings ads
+call :LOG Disabling settings ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338387Enabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353694Enabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353696Enabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SystemPaneSuggestionsEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling auto install of suggested apps - "Get more out of windows" ad space
+call :LOG Disabling auto install of suggested apps - "Get more out of windows" ad space
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338388Enabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling general tips and ads - why are these together Microslop
+call :LOG Disabling general tips and ads - why are these together Microslop
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling home screen ads
+call :LOG Disabling home screen ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338393Enabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling Timeline Suggestions ads
+call :LOG Disabling Timeline Suggestions ads
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-353698Enabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SystemPaneSuggestionsEnabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disable Windows Content Delivery
+call :LOG Disable Windows Content Delivery
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v ContentDeliveryAllowed /t REG_DWORD /d 0 /f
 
-ECHO Disable automatic enabling of OEM and Preinstalled apps
+call :LOG Disable automatic enabling of OEM and Preinstalled apps
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v OemPreInstalledAppsEnabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEverEnabled /t REG_DWORD /d 0 /f
@@ -955,42 +973,42 @@ REG DEL "HKCU\SOFTWARE\Microsoft\Siuf\Rules" /v PeriodInNanoSeconds /f
 REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableTailoredExperiencesWithDiagnosticData  /t REG_DWORD /d 1 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager" /v EnthusiastMode /t REG_DWORD /d 1 /f
 
-ECHO Preferrence- Disable the TaskView button in the taskbar - same as "Win+tab" -clutter
+call :LOG Preferrence- Disable the TaskView button in the taskbar - same as "Win+tab" -clutter
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowTaskViewButton /t REG_DWORD /d 0 /f
 
-ECHO Preferrence- disable the people button in the taskbar
+call :LOG Preferrence- disable the people button in the taskbar
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" /v PeopleBand /t REG_DWORD /d 0 /f
  
-ECHO Enable right-click menu to auto end tasks from taskbar 
+call :LOG Enable right-click menu to auto end tasks from taskbar 
 REG ADD "HKCU\Control Panel\Desktop" /v AutoEndTasks /t REG_SZ /d 1 /f
 
-ECHO disable windows feeds for users
+call :LOG disable windows feeds for users
 REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" /v EnableFeeds /t REG_DWORD /d 0 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Feeds" /v ShellFeedsTaskbarViewMode /t REG_DWORD /d 2 /f
-ECHO Hide the meet now button on the taskbar
+call :LOG Hide the meet now button on the taskbar
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v HideSCAMeetNow /t REG_DWORD /d 1 /f
 
-ECHO Set the searchbox taskbar to icon only for less wasted space
+call :LOG Set the searchbox taskbar to icon only for less wasted space
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f
 
-ECHO Disabling Bing Search in start menu results
+call :LOG Disabling Bing Search in start menu results
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling start menu ads method 2
+call :LOG Disabling start menu ads method 2
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f
 
-ECHO Disabling tailored experiences with telemitry
+call :LOG Disabling tailored experiences with telemitry
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f
 
-ECHO Disabling Cross-Device Resume -optional but reverse this if you sync your phone to your pc - honestly your web browser should do this - mostly web
+call :LOG Disabling Cross-Device Resume -optional but reverse this if you sync your phone to your pc - honestly your web browser should do this - mostly web
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v IsResumeAllowed /t REG_DWORD /d 0 /f
 
-ECHO Disable MS Co-pilot per user registry settings
+call :LOG Disable MS Co-pilot per user registry settings
 REG ADD "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f
 REG ADD "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsCopilot" /v AllowCopilotRuntime /t REG_DWORD /d 0 /f
 
-echo --- Disable Microsoft Office logging
+call :LOG --- Disable Microsoft Office logging
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\15.0\Outlook\Options\Mail" /v "EnableLogging" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\16.0\Outlook\Options\Mail" /v "EnableLogging" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\15.0\Outlook\Options\Calendar" /v "EnableCalendarLogging" /t REG_DWORD /d 0 /f
@@ -1002,21 +1020,21 @@ REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Office\16.0\OSM" /v "EnableLogging" /t
 REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Office\15.0\OSM" /v "EnableUpload" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Policies\Microsoft\Office\16.0\OSM" /v "EnableUpload" /t REG_DWORD /d 0 /f
 
-echo --- Disable Microsoft Office client telemetry
+call :LOG --- Disable Microsoft Office client telemetry
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" /v "DisableTelemetry" /t REG_DWORD /d 1 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\ClientTelemetry" /v "DisableTelemetry" /t REG_DWORD /d 1 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" /v "VerboseLogging" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\ClientTelemetry" /v "VerboseLogging" /t REG_DWORD /d 0 /f
 
-echo --- Disable Microsoft Office Customer Experience Improvement Program
+call :LOG --- Disable Microsoft Office Customer Experience Improvement Program
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\15.0\Common" /v "QMEnable" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\16.0\Common" /v "QMEnable" /t REG_DWORD /d 0 /f
 
-echo --- Disable Microsoft Office feedback
+call :LOG --- Disable Microsoft Office feedback
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\15.0\Common\Feedback" /v "Enabled" /t REG_DWORD /d 0 /f
 REG ADD "HKCU\SOFTWARE\Microsoft\Office\16.0\Common\Feedback" /v "Enabled" /t REG_DWORD /d 0 /f
 
-ECHO Disabling sticky keys feature because leaving something on the shift-key is just as bad as capslock
+call :LOG Disabling sticky keys feature because leaving something on the shift-key is just as bad as capslock
 REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /f
 
 ::disabled this section because it negatively affects chips with CCD cache routing -X3d etc- and e-core parking when gaming
@@ -1037,7 +1055,7 @@ REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /
 :: ================================
 :: START
 :: ================================
-::echo Starting registry deployment...
+::call :LOG Starting registry deployment...
 ::call :Log ===== START =====
 
 :: ================================
@@ -1046,7 +1064,7 @@ REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /
 ::call :Log Processing loaded user hives
 
 ::for /f "tokens=1" %%U in ('reg query HKEY_USERS') do (
-::    echo %%U | findstr /i "_Classes" >nul
+::    call :LOG %%U | findstr /i "_Classes" >nul
 ::    if errorlevel 1 (
 ::        call :ApplySettings "%%U"
 ::    )
@@ -1113,37 +1131,37 @@ REG ADD "HKCU\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /
 :: APPLY REGISTRY SETTINGS TO ALL USERS-END
 :: ===========================================
 call :Log ===== COMPLETE =====
-echo Done. Log file: %LOGFILE%
+call :LOG Done. Log file: %LOGFILE%
 
 goto reboot
 
-ECHO ======================================END PENDING==========================================
+::======================================END FOR EACH USER REGISTRY LOOP==========================================
 
 :GamingTweaks
-ECHO.
-ECHO Begin Gaming Tweaks Section
-ECHO.
+call :LOG.
+call :LOG Begin Gaming Tweaks Section
+call :LOG.
 
-ECHO Reset and Redetect Windows HPET dependency -High Precision Event Timer- - fixes issue where HPET was not detected properly
+call :LOG Reset and Redetect Windows HPET dependency -High Precision Event Timer- - fixes issue where HPET was not detected properly
 bcdedit.exe /deletevalue useplatformclock >nul 2>&1
 if errorlevel 1 (
-    echo useplatformclock was not explicitly configured or could not be changed.
+    call :LOG useplatformclock was not explicitly configured or could not be changed.
 ) else (
-    echo Removed explicit useplatformclock override.
+    call :LOG Removed explicit useplatformclock override.
 )
-ECHO Enabling HAGS - Hardware Accelerated GPU Scheduling - will only work if supported but at least not disabled
+call :LOG Enabling HAGS - Hardware Accelerated GPU Scheduling - will only work if supported but at least not disabled
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HWSchMode /t REG_DWORD /d 2 /f
 
-ECHO Enabling Optimizations for Windowed Games
+call :LOG Enabling Optimizations for Windowed Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR\Graphics" /v OptimizationsForWindowedGames /t REG_DWORD /d 1 /f
 
-ECHO Increasing system responsiveness for Games
+call :LOG Increasing system responsiveness for Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f
 
-ECHO Enabling Optimizations for Windowed Games
+call :LOG Enabling Optimizations for Windowed Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR\Graphics" /v OptimizationsForWindowedGames /t REG_DWORD /d 1 /f
 
-ECHO Setting GPU priority for Full Screen Apps and Games based on Microsoft Learn Docs
+call :LOG Setting GPU priority for Full Screen Apps and Games based on Microsoft Learn Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v Priority /t REG_DWORD /d 6 /f
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Medium /f
@@ -1164,41 +1182,44 @@ REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProf
 		if /i "%Type%"=="Desktop" goto desktop
 		goto unknownchassis
 	:laptop
-		ECHO Laptop detected - Not recommended to enabled these power tweaks
+		call :LOG Laptop detected - Not recommended to enabled these power tweaks
 		::changeme
 		goto REBOOT
 	:desktop
-		ECHO Desktop detected - Enabling Desktop Only Optimizations
-		ECHO.
-		ECHO Disable power throttling - this will kill the battery life on a laptop
+		call :LOG Desktop detected - Enabling Desktop Only Optimizations
+		call :LOG.
+		call :LOG Disable power throttling
 		REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" /v PowerThrottlingOff /t REG_DWORD /d 1 /f
 		REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" /v NoLazyMode /t REG_DWORD /d 00000000 /f
 		REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" /v AlwaysOn /t REG_DWORD /d 00000000 /f
 
-		ECHO Enable Ultimate performance power plan for desktops only
-		REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0" /v Attributes /t REG_DWORD /d 2 /f
-		REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e" /v Attributes /t REG_DWORD /d 2 /f
+		call :LOG Enable Ultimate performance power plan for desktops only
+		powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 >nul 2>&1
+		powercfg /setactive e9a42b02-d5df-448d-aa00-03f14749eb61
+		::powercfg /getactivescheme
+		::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\238C9FA8-0AAD-41ED-83F4-97BE242C8F20\7bc4a2f9-d8fc-4469-b07b-33eb785aaca0" /v Attributes /t REG_DWORD /d 2 /f
+		::REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\abfc2519-3608-4c2a-94ea-171b0ed546ab\94ac6d29-73ce-41a6-809f-6363ba21b47e" /v Attributes /t REG_DWORD /d 2 /f
 
-::echo Disabling Dynamic P-state for GPUs...forces gpu to run at 100 and all cores enabled
+::call :LOG Disabling Dynamic P-state for GPUs...forces gpu to run at 100 and all cores enabled
 		powershell -Command "$gpuDevices = Get-WmiObject Win32_VideoController | Where-Object { $_.PNPDeviceID -match 'PCI\\VEN_' }; foreach ($gpu in $gpuDevices) { ::Write-Host 'Processing GPU:' $gpu.Name; $driverKey = (Get-ItemProperty \"HKLM:\SYSTEM\CurrentControlSet\Enum\$($gpu.PNPDeviceID)\" -Name 'Driver').Driver; if ::($driverKey -match '{.*}') { $regPath = \"HKLM:\SYSTEM\CurrentControlSet\Control\Class\$driverKey\"; Write-Host 'Setting registry key at:' $regPath; ::Set-ItemProperty -Path $regPath -Name 'DisableDynamicPstate' -Value 1 -Type DWord; Write-Host 'Dynamic P-state disabled successfully' } }"
 		goto REBOOT
 	:unknownchassis
-	ECHO Unable to determine chassis type. Skipped power tweaks.
-	ECHO.
+	call :LOG Unable to determine chassis type. Skipped power tweaks.
+	call :LOG.
 	goto REBOOT
 
 endlocal
 :REBOOT
-ECHO.
-ECHO ****************************ALL FINISHED!*******************************
-ECHO *																		*
-ECHO *		IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE		*
-ECHO *				 "https://buymeacoffee.com/thebeardofl"					*
-ECHO *																		*
-ECHO ****************************ALL FINISHED!*******************************
-ECHO.
-ECHO A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
-ECHO. 
+call :LOG.
+call :LOG ****************************ALL FINISHED!*******************************
+call :LOG *																		*
+call :LOG *		IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE		*
+call :LOG *				 "https://buymeacoffee.com/thebeardofl"					*
+call :LOG *																		*
+call :LOG ****************************ALL FINISHED!*******************************
+call :LOG.
+call :LOG A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
+call :LOG. 
 choice /c YN /n /m "Restart now? [Y/N]: "
 if errorlevel 2 goto :EXIT
 if errorlevel 1 goto :RESTART
@@ -1206,7 +1227,7 @@ if errorlevel 1 goto :RESTART
 :RESTART
 shutdown.exe /r /t 0
 exit /b
-ECHO.
+call :LOG.
 
 :EXIT
 exit
