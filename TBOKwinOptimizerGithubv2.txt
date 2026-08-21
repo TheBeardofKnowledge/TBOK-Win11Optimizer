@@ -94,7 +94,7 @@ if errorlevel 1 goto :SystemTweaks
 :SYSTEMTWEAKS
 call :LOG Detected:
 ver >> "%LOGFILE%"
-call :LOG systeminfo | findstr /B /C:"OS Name" /C:"OS Version" >> "%LOGFILE%"
+systeminfo | findstr /B /C:"OS Name" /C:"OS Version" >> "%LOGFILE%"
 
 :restorepoint
 call :LOG Before anything is modified - create system restore point
@@ -209,7 +209,7 @@ powershell.exe -NoProfile -Command ^
 "try { ^
     $ramMB = :Round(
     (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB
-	)
+)
     Write-Output ('Detected RAM: ' + $ramMB + ' MB'); ^
     if ($ramMB -ge 32768) { ^
         Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$true} | Out-Null; ^
