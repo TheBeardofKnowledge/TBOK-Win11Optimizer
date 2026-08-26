@@ -713,9 +713,11 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnabl
 ::___________________________________________PENDING SECTION END___________________________________________
 
 :USERTWEAKS
+goto UserRegistryDeployment
 :: ===============================================================
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
 :: ===============================================================
+
 :ApplySettings
 call :LOG DEBUG ApplySettings called. Arg1=[%~1]
 set "BASE=%~1"
@@ -923,11 +925,8 @@ REG ADD "%BASE%\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58
 goto :eof
 
 ::***********************************************END of USER REGISTRY SETTINGS TO APPLY***********************************************
-:: ================================
-:: START
-:: ================================
-
-call :LOG Starting registry deployment...
+:UserRegistryDeployment
+call :LOG Starting per-user registry deployment...
 call :Log ===== START =====
 
 :: ================================
