@@ -214,7 +214,7 @@ call :LOG Setting Unecessary Windows Services to Optimized State
 call :LOG Disabling services that are not used or should be disabled
 
 ::deprecated means service not in current versions of windows 10-11pro-ent-ltsc
-::deprecated call :SetServiceStartup AJRouter Disabled
+::deprecated call :SetServiceStartup AJRouter disabled
 call :SetServiceStartup AppVClient disabled
 call :SetServiceStartup NetTcpPortSharing disabled
 call :SetServiceStartup DialogBlockingService disabled
@@ -583,9 +583,9 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v HideEULAPage /t REG_D
 call :LOG Disable the lock screen which includes personalized ads - MS Spotlight ads- Default 0
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f
 
-call :LOG Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
-REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
-REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
+::call :LOG Disabling Windows Defender sample reporting - sends all scanned unknown files to Microsoft and has a known vulnerability
+::REG ADD "HKLM\software\microsoft\windows defender\spynet" /v spynetreporting /t REG_DWORD /d 0 /f
+::REG ADD "HKLM\software\microsoft\windows defender\spynet" /v submitsamplesconsent /t REG_DWORD /d 0 /f
 	
 call :LOG Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f	
@@ -717,6 +717,7 @@ REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnabl
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
 :: ===============================================================
 :ApplySettings
+call :LOG DEBUG ApplySettings called. Arg1=[%~1]
 set "BASE=%~1"
 if not defined BASE (
     call :LOG ERROR ApplySettings called with no registry hive
@@ -737,8 +738,6 @@ call :LOG Applying settings to %BASE%
 call :LOG ==================== Begin per-user level tweaks =======================
 
 ::echo BASE=%BASE%
-call :LOG Disabling sticky keys feature
-REG ADD "%BASE%\Control Panel\Accessibility\StickyKeys" /v Flags /t REG_SZ /d 58 /f
 
 call :LOG Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
 REG DEL "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" /f
@@ -937,7 +936,7 @@ call :Log ===== START =====
 call :Log Processing loaded user hives
 for /f "delims=" %%U in ('reg query HKEY_USERS ^| findstr /R "HKEY_USERS\\S-1-5-21-"') do (
 ::echo Found User Hive: [%%U]
-call :ApplySettings %%U
+call :ApplySettings "%%U"
 )
 :: ================================
 :: 2. ALL USER PROFILES
@@ -1099,7 +1098,6 @@ call :LOG *																		*
 call :LOG ****************************ALL FINISHED!*******************************
 
 call :LOG A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
-endlocal
 choice /c YN /n /m "Restart now? [Y/N]: "
 if errorlevel 2 goto :EXIT
 if errorlevel 1 goto :RESTART
