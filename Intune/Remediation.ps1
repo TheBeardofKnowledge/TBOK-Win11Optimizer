@@ -360,7 +360,7 @@ function Set-UserPreferences {
 if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
 
     $loadedSids = Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
-        Where-Object { $_.PSChildName -match '^S-1-5-21-\d+-\d+-\d+-\d+$' } |
+        Where-Object { $_.PSChildName -match '^S-1-5-21-|^S-1-12-1-' } |
         Select-Object -ExpandProperty PSChildName
 
     foreach ($sid in $loadedSids) {

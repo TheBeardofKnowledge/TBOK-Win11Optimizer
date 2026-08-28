@@ -949,7 +949,7 @@ call :LOG Starting per-user registry deployment...
 :: 1. CURRENTLY LOADED USERS
 :: ================================
 call :Log Processing loaded user hives
-for /f "delims=" %%U in ('reg query HKEY_USERS ^| findstr /R "HKEY_USERS\\S-1-5-21-"') do (
+for /f "delims=" %%U in ('reg query HKEY_USERS ^| findstr /R "HKEY_USERS\\S-1-5-21- HKEY_USERS\\S-1-12-1-"') do (
 ::echo Found User Hive: [%%U]
 call :ApplySettings "%%U"
 )
