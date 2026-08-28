@@ -6,7 +6,7 @@ re-tester individuellement les ~150 services : plus rapide, et evite de reprodui
 fragilite du script d'origine sur des controles repetes a chaque cycle de detection.
 #>
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 $MarkerPath    = 'HKLM:\SOFTWARE\TBOK-Optimizer'
 
 try {

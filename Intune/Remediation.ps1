@@ -9,7 +9,7 @@ Intune : configurer "Run this script using the logged-on credentials" = No (exec
 "Enforce script signature check" selon ta politique, 64-bit PowerShell = Yes.
 #>
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 $MarkerPath    = 'HKLM:\SOFTWARE\TBOK-Optimizer'
 $LogDir        = "$env:ProgramData\TBOK-Optimizer"
 $LogFile       = Join-Path $LogDir 'remediation.log'
@@ -151,39 +151,59 @@ if ($Config.ApplyPerformanceTweaks) {
     }
 
     # Set-CimInstance sur Win32_PageFileSetting renvoie "Valeur hors de la plage" sur pas mal de
-    # builds (round-trip de proprietes read-only cote provider). Get-WmiObject/.Put() est le
-    # contournement documente et fiable pour cette classe WMI precise.
-    Invoke-Safely "Configure pagefile sizing" {
-        $ramMB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 0)
-        if ($ramMB -ge 32768) {
+    # builds (round-trip de proprietes read-only cote provider). Get-WmiObject/.Put() evite le
+    # faux succes (l'exception devient catchable), mais peut encore echouer sur certaines
+    # machines si InitialSize et MaximumSize sont pousses dans le meme .Put() - certains
+    # providers WMI valident les deux valeurs contre un etat pas encore rafraichi. On les
+    # pousse donc en 2 appels separes (contournement documente), avec un log de l'etat courant
+    # a chaque etape pour pouvoir diagnostiquer precisement laquelle echoue si ca persiste.
+    $ramMB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 0)
+    if ($ramMB -ge 32768) {
+        Invoke-Safely "Set pagefile management to automatic (RAM=$ramMB MB >= 32GB)" {
             $cs = Get-WmiObject Win32_ComputerSystem
             if (-not $cs.AutomaticManagedPagefile) {
                 $cs.AutomaticManagedPagefile = $true
                 $cs.Put() | Out-Null
                 $script:RebootRequired = $true
             }
-            Write-Log "RAM=$ramMB MB >= 32GB, pagefile management set to automatic"
-        } else {
-            $min = 4096
-            $max = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
+        }
+    } else {
+        $min = 4096
+        $max = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
+        Write-Log "Pagefile target: RAM=$ramMB MB, Initial=$min MB Maximum=$max MB"
+
+        Invoke-Safely "Disable automatic pagefile management" {
             $cs = Get-WmiObject Win32_ComputerSystem
+            Write-Log "AutomaticManagedPagefile currently=$($cs.AutomaticManagedPagefile)"
             if ($cs.AutomaticManagedPagefile) {
                 $cs.AutomaticManagedPagefile = $false
                 $cs.Put() | Out-Null
             }
-            $pf = Get-WmiObject Win32_PageFileSetting -Filter "Name='C:\\pagefile.sys'"
-            if ($pf) {
-                if ($pf.InitialSize -ne $min -or $pf.MaximumSize -ne $max) {
+        }
+
+        $pf = Get-WmiObject Win32_PageFileSetting -Filter "Name='C:\\pagefile.sys'" -ErrorAction SilentlyContinue
+        if ($pf) {
+            Write-Log "Existing pagefile setting: Initial=$($pf.InitialSize) MB Maximum=$($pf.MaximumSize) MB"
+            if ($pf.InitialSize -ne $min) {
+                Invoke-Safely "Set pagefile InitialSize to $min MB" {
                     $pf.InitialSize = $min
+                    $pf.Put() | Out-Null
+                    $script:RebootRequired = $true
+                }
+            }
+            $pf = Get-WmiObject Win32_PageFileSetting -Filter "Name='C:\\pagefile.sys'" -ErrorAction SilentlyContinue
+            if ($pf -and $pf.MaximumSize -ne $max) {
+                Invoke-Safely "Set pagefile MaximumSize to $max MB" {
                     $pf.MaximumSize = $max
                     $pf.Put() | Out-Null
                     $script:RebootRequired = $true
                 }
-            } else {
+            }
+        } else {
+            Invoke-Safely "Create pagefile setting (Initial=$min MB Maximum=$max MB)" {
                 Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{ Name = 'C:\pagefile.sys'; InitialSize = $min; MaximumSize = $max } | Out-Null
                 $script:RebootRequired = $true
             }
-            Write-Log "RAM=$ramMB MB, pagefile Initial=$min MB Maximum=$max MB"
         }
     }
 }
@@ -214,24 +234,24 @@ if ($Config.ApplyServiceStartupTweaks) {
     # NlaSvc, netprofm, TokenBroker, UsoSvc, WpnService, RemoteAccess, RemoteRegistry (sensibles entreprise).
     $manualServices = @(
         'ALG', 'AppIDSvc', 'AppMgmt', 'AppReadiness', 'Appinfo', 'AssignedAccessManagerSvc', 'AxInstSV', 'BDESVC',
-        'BcastDVRUserService_*', 'BluetoothUserService_*', 'BTAGService', 'bthserv', 'CaptureService_*', 'cbdhsvc_*',
-        'CertPropSvc', 'cloudidsvc', 'COMSysApp', 'ClipSVC', 'ConsentUxUserSvc_*', 'CredentialEnrollmentManagerUserSvc_*',
-        'CscService', 'DcpSvc', 'dcsvc', 'defragsvc', 'DevQueryBroker', 'DeviceAssociationBroker_*', 'DeviceAssociationService',
-        'DeviceInstall', 'DevicePickerUserSvc_*', 'DevicesFlowUserSvc_*', 'diagnosticshub.standardcollector.service',
+        'BcastDVRUserService', 'BluetoothUserService', 'BTAGService', 'bthserv', 'CaptureService', 'cbdhsvc',
+        'CertPropSvc', 'cloudidsvc', 'COMSysApp', 'ClipSVC', 'ConsentUxUserSvc', 'CredentialEnrollmentManagerUserSvc',
+        'CscService', 'DcpSvc', 'dcsvc', 'defragsvc', 'DevQueryBroker', 'DeviceAssociationBroker', 'DeviceAssociationService',
+        'DeviceInstall', 'DevicePickerUserSvc', 'DevicesFlowUserSvc', 'diagnosticshub.standardcollector.service',
         'diagsvc', 'DisplayEnhancementService', 'DmEnrollmentSvc', 'dmwappushservice', 'dot3svc', 'DoSvc', 'embeddedmode',
         'fdPHost', 'fhsvc', 'hidserv', 'icssvc', 'EapHost', 'edgeupdate', 'edgeupdatem', 'EFS', 'EntAppSvc', 'FDResPub', 'Fax',
         'FrameServer', 'FrameServerMonitor', 'GraphicsPerfSvc', 'HvHost', 'IEEtwCollectorService', 'IKEEXT', 'IpxlatCfgSvc',
-        'lfsvc', 'lltdsvc', 'lmhosts', 'LxpSvc', 'McpManagementService', 'MessagingService_*', 'MicrosoftEdgeElevationService',
-        'MixedRealityOpenXRSvc', 'MSDTC', 'MsKeyboardFilter', 'MSiSCSI', 'msiserver', 'NPSMSvc_*', 'NaturalAuthentication',
+        'lfsvc', 'lltdsvc', 'lmhosts', 'LxpSvc', 'McpManagementService', 'MessagingService', 'MicrosoftEdgeElevationService',
+        'MixedRealityOpenXRSvc', 'MSDTC', 'MsKeyboardFilter', 'MSiSCSI', 'msiserver', 'NPSMSvc', 'NaturalAuthentication',
         'NcaSvc', 'NcbService', 'NcdAutoSetup', 'NetSetupSvc', 'Netman', 'NgcCtnrSvc', 'NgcSvc', 'p2pimsvc', 'p2psvc',
-        'P9RdrService_*', 'PcaSvc', 'PeerDistSvc', 'PenService_*', 'perceptionsimulation', 'PerfHost', 'PhoneSvc',
-        'PimIndexMaintenanceSvc_*', 'pla', 'PlugPlay', 'PNRPAutoReg', 'PNRPsvc', 'PolicyAgent', 'PrintNotify',
-        'PrintWorkflowUserSvc_*', 'PushToInstall', 'QWAVE', 'RasAuto', 'RasMan', 'RetailDemo', 'RmSvc', 'RpcLocator',
+        'P9RdrService', 'PcaSvc', 'PeerDistSvc', 'PenService', 'perceptionsimulation', 'PerfHost', 'PhoneSvc',
+        'PimIndexMaintenanceSvc', 'pla', 'PlugPlay', 'PNRPAutoReg', 'PNRPsvc', 'PolicyAgent', 'PrintNotify',
+        'PrintWorkflowUserSvc', 'PushToInstall', 'QWAVE', 'RasAuto', 'RasMan', 'RetailDemo', 'RmSvc', 'RpcLocator',
         'SCPolicySvc', 'ScDeviceEnum', 'SCardSvr', 'SDRSVC', 'seclogon', 'SEMgrSvc', 'SensorDataService', 'SensorService',
         'SensrSvc', 'SessionEnv', 'SharedAccess', 'SharedRealitySvc', 'shpamsvc', 'SmsRouter', 'smphost', 'SNMPTrap',
         'spectrum', 'SstpSvc', 'SSDPSRV', 'StiSvc', 'StorSvc', 'svsvc', 'swprv', 'TabletInputService', 'TapiSrv',
-        'TieringEngineService', 'TimeBroker', 'TimeBrokerSvc', 'TroubleshootingSvc', 'UI0Detect', 'UdkUserSvc_*',
-        'UmRdpService', 'UnistoreSvc_*', 'UserDataSvc_*', 'upnphost', 'VacSvc', 'vds', 'vmicguestinterface', 'vmicheartbeat',
+        'TieringEngineService', 'TimeBroker', 'TimeBrokerSvc', 'TroubleshootingSvc', 'UI0Detect', 'UdkUserSvc',
+        'UmRdpService', 'UnistoreSvc', 'UserDataSvc', 'upnphost', 'VacSvc', 'vds', 'vmicguestinterface', 'vmicheartbeat',
         'vmickvpexchange', 'vmicrdv', 'vmicshutdown', 'vmictimesync', 'vmicvmsession', 'vmicvss', 'VSS', 'WalletService',
         'wbengine', 'WcsPlugInService', 'wcncsvc', 'WdNisSvc', 'WdiServiceHost', 'WdiSystemHost', 'WebClient', 'Wecsvc',
         'wercplsupport', 'WEPHOSTSVC', 'WerSvc', 'WFDSConMgrSvc', 'WiaRpc', 'WinHttpAutoProxySvc', 'WinRM', 'wisvc',
@@ -241,12 +261,12 @@ if ($Config.ApplyServiceStartupTweaks) {
     foreach ($s in $manualServices) { Set-ServiceStartupSafely -Name $s -StartupType Manual }
 
     $autoServices = @(
-        'AudioEndpointBuilder', 'AudioSrv', 'BFE', 'BITS', 'BrokerInfrastructure', 'BthHFSrv', 'CDPUserSvc_*',
+        'AudioEndpointBuilder', 'AudioSrv', 'BFE', 'BITS', 'BrokerInfrastructure', 'BthHFSrv', 'CDPUserSvc',
         'CoreMessagingRegistrar', 'CryptSvc', 'DPS', 'DcomLaunch', 'Dhcp', 'DispBrokerDesktopSvc', 'Dnscache', 'dusmsvc',
         'EventLog', 'EventSystem', 'FontCache', 'gpsvc', 'iphlpsvc', 'LSM', 'LanmanServer', 'LanmanWorkstation', 'MpsSvc',
-        'nsi', 'OneSyncSvc_*', 'Power', 'ProfSvc', 'RpcEptMapper', 'RpcSs', 'SENS', 'SamSs', 'Schedule', 'ShellHWDetection',
+        'nsi', 'OneSyncSvc', 'Power', 'ProfSvc', 'RpcEptMapper', 'RpcSs', 'SENS', 'SamSs', 'Schedule', 'ShellHWDetection',
         'Spooler', 'sppsvc', 'SystemEventsBroker', 'Themes', 'tiledatamodelsvc', 'TrkWks', 'tzautoupdate', 'uhssvc',
-        'UserManager', 'W32Time', 'Wcmsvc', 'WinDefend', 'Winmgmt', 'WlanSvc', 'WpnUserService_*'
+        'UserManager', 'W32Time', 'Wcmsvc', 'WinDefend', 'Winmgmt', 'WlanSvc', 'WpnUserService'
     )
     foreach ($s in $autoServices) { Set-ServiceStartupSafely -Name $s -StartupType Automatic }
 
