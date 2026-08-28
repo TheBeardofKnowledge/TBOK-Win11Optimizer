@@ -1,3 +1,19 @@
+:: Hello - if youre reading this its because you dont just blindly apply scripts willy nilly
+:: and you want to know the meat and potatoes of what its doing - no TRUST ME BRO, LOGIC.
+:: I respect that, and honestly, it's the only way you should run a script you didn't make
+:: This script is a combination of my 25 plus years of IT experience with Windows as an IT admin
+:: While it is nothing slick or polished - it gets down to the essentials that I believe
+:: should be the standard in a Windows Install to function properly.
+:: The main issue I had with debloat and optimization scripts is that none of them did this:
+:: Apply the optimizations to all users of a pc and without breaking any features.
+:: The aim for this is to have a simple script you can either directly run on a pc, or 
+:: push to a machine on the network and have it automatically Optimize the system without you touching anything.
+:: No GUI,no decisions, just every good change that makes Windows run better and leaner, all in one go.
+:: If you don't understand something here, just ask, my DM's and comments on social media are open
+:: If you have an issue or want to request a feature, please request it on GitHub
+:: If you want to learn more about each command, use what I use: https://learn.microsoft.com
+::READY? Lets go!
+:: 
 ::turn off echoing all commands
 @ECHO OFF
 ::change the terminal color to something friendlier
@@ -18,23 +34,26 @@ ECHO No changes are being made at this time.
 
 cls	
 ::::::::::::begin script helper objects::::::::::
+::These are items that are called later in the script to perform a function - trims the code size
 ::enable extended script logic and variable holding
 setlocal enableextensions EnableDelayedExpansion
 
-::Log stored in current script directory
+::Log stored in current script directory with computername info for multi-pc deployments
 set "LOGFILE=%~dp0TBOKWinOptimizer-%computername%.log"
 goto menu
 
+::This line is called to see if a service exists in the system before making changes - prevents errors
 :ServiceExists
 sc query "%~1" >nul 2>&1
 exit /b %errorlevel%
 
+::This line is called to modify a service startup mode
 :SetServiceStartup
 powershell.exe -NoProfile -Command ^
 "Get-Service -Name '%~1' -ErrorAction SilentlyContinue ^| ForEach-Object { try { sc.exe config ""$($_.Name)"" start= %~2 > $null 2>&1 } catch {} }"
 exit /b
 
-::LOG and echo helper to avoid duplicate lines in script
+::LOG and echo helper to avoid duplicate lines in script - Echoes on screen and also into logfile
 ::usage call :LOG "message to echo"
 :LOG 
 echo %*
@@ -43,7 +62,7 @@ exit /b
 ::::::::::::end script helper objects::::::::::
 
 :MENU
-TITLE TBOK Windows Performance Optimizer V08-26-2026
+TITLE TBOK Windows Performance Optimizer V08-28-2026
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
 ECHO _______Welcome to TBOK Windows Performance Optimizer_______
 ECHO ============================================================
@@ -57,12 +76,12 @@ ECHO       #+#     #+#    #+# #+#    #+# #+#   #+#
 ECHO      ###     #########   ########  ###    ### 
 ECHO.
 ECHO ============================================================
-ECHO  The Beard of Knowledge Windows Optimizer VERSION 08-26-2026
+ECHO  The Beard of Knowledge Windows Optimizer VERSION 08-28-2026
 ECHO.
 ECHO Please choose
-ECHO 1. Apply system and user level improvements -RECOMMENDED START*DEFAULT*
+ECHO 1. Apply system and user level improvements -RECOMMENDED START*Default Autorun*
 ECHO 2. Apply only user level improvements
-ECHO 3. Apply only gaming tweaks
+ECHO 3. Apply only gaming tweaks - for desktops only
 ECHO 4. EXIT
 ECHO.
 ECHO IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
@@ -82,6 +101,7 @@ ECHO Creating Log file and adding system information
 call :LOG Detected:
 ver >> "%LOGFILE%"
 systeminfo | findstr /B /C:"OS Name" /C:"OS Version" >> "%LOGFILE%"
+PowerShell -c "Get-CimInstance -ClassName Win32_ComputerSystemProduct ^| Select-Object Vendor, Name, IdentifyingNumber" >> "%LOGFILE%"
 
 :restorepoint
 call :LOG Before anything is modified - create system restore point
@@ -119,11 +139,12 @@ call :LOG Starting selected changes
 call :LOG Setting Hibernation Mode based on PC chassis type
 call :LOG Should be disabled for desktops-especially with SSD or NVME
 ::	Reasons to leave Hibernation/Fast Startup/Hybrid Shutdown disabled on desktops...
-::	1. Most modern PC's come with an SSD or m2 NVME drive and fast startup is not required as it was made to improve performance for systems with slower spinning disks
+::	1. Most modern PC's come with an SSD or m2 NVME drive and fast startup is not required
+::     it was made to improve performance for systems with slower spinning disks
 ::	2. Hybrid shutdown/hibernation/fast startup often causes Windows Updates to NOT install properly.
 ::	3. "system up time" timer in task manager keeps running with this enabled.
 ::	4. Software with poor memory management design can cause excess ram usage
-::	Only Reason to enable on a laptop:
+::	Only Reason to enable it is on a laptop:
 ::	Only good thing from Hibernate/Fast Startup is if your Laptop/Tablet battery reaches critical while in sleep/standby mode...
 ::	your open files are saved because the laptop will wake and save data in ram to hibernation file, then shutdown.
 
@@ -155,7 +176,8 @@ call :LOG Should be disabled for desktops-especially with SSD or NVME
 	
 :F8startup
 call :LOG Restoring the much beloved F8 Startup menu availability - WHY DID THEY REMOVE THAT
-::This is optional to enable - Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
+::This is optional to enable but a good default to Restore
+::Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
 ::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu - be aware
 bcdedit /set {default} bootmenupolicy legacy
 ECHO.
@@ -536,37 +558,56 @@ call :LOG Disabling network throttling
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f
 
 call :LOG Fixing IRP stack size for better network flow - MS default is 15 for 10mbps - do not set above 32 for stability
+::Enable in current config
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters" /v IRPStackSize /t REG_DWORD /d 30 /f
+::Enable for last known good config
+REG ADD "HKLM\SYSTEM\ControlSet001\Services\LanmanServer\Parameters" /v IRPStackSize /t REG_DWORD /d 30 /f
 
 call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f 
 
 call :LOG Speed up shutdown time
+::Enable in current config
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_SZ /d 5000 /f
+::Enable for last known good config
+REG ADD "HKLM\SYSTEM\ControlSet001\Control" /v WaitToKillServiceTimeout /t REG_SZ /d 5000 /f
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
+::Enable in current config
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+::Enable for last known good config
+REG ADD "HKLM\SYSTEM\ControlSet001\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
 
 call :LOG Disabling the setting allowing hardware to install whatever software addon - LG Monitor McAffee Incident
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v PreventDeviceMetadataFromNetwork /t REG_DWORD /d 1 /f 
 
 call :LOG Disable Webview dependency for Search - breaks nothing - puts search back into classic mode
+::disables it in last known good config
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledState /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledStateOptions /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v Variant /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v VariantPayload /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\1694661260" /v VariantPayloadKind  /t REG_DWORD /d 0 /f
+::disables it in current config
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledState /t REG_DWORD /d 1 /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260" /v EnabledStateOptions /t REG_DWORD /d 0 /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260" /v Variant /t REG_DWORD /d 0 /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260" /v VariantPayload /t REG_DWORD /d 0 /f
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260" /v VariantPayloadKind  /t REG_DWORD /d 0 /f
 
 call :LOG Turning off telemetry data collection Local Machine
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowDesktopAnalyticsProcessing /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f
+REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
 REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v LimitEnhancedDiagnosticDataWindowsAnalytics /t REG_DWORD /d 1 /f
-REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
 REG ADD "HKLM\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /t REG_DWORD /d 0 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener" /v Start /t REG_DWORD /d 0 /f
+::disables it in last known good config
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
-REG ADD "HKLM\Software\Policies\Microsoft\Windows\DataCollection" /v DiagTrack /t REG_DWORD /d 0 /f
+::disables it in current config
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\DiagTrack" /v Start /t REG_DWORD /d 00000004 /f
+
 
 call :LOG Enable verbose logon-off status on shutdown screen -optional but helpful
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v VerboseStatus /t REG_DWORD /d 1 /f
@@ -585,12 +626,19 @@ call :LOG Disable the lock screen which includes personalized ads - MS Spotlight
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f
 
 call :LOG Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
+::disables it in current config
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f	
-REG ADD "HKLM\SYSTEM\ControlSet001\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\FirmwareResources" /v WPBT /t REG_BINARY /d 0 /f
+::disables it in last known good config
+REG ADD "HKLM\SYSTEM\ControlSet001\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f
+REG ADD "HKLM\SYSTEM\ControlSet001\Control\FirmwareResources" /v WPBT /t REG_BINARY /d 0 /f
+
 
 call :LOG Fix Network Data Usage Graph not working
+::Fixes it in last known good config
 REG ADD "HKLM\SYSTEM\ControlSet001\Services\Ndu" /v Start /t REG_DWORD /d 2 /f
+::Fixes it in current config
+REG ADD "HKLM\SYSTEM\CurrentControlSet\Services\Ndu" /v Start /t REG_DWORD /d 2 /f
 
 :systemtelemitry
 call :LOG Disabling Windows System Telemetry through
@@ -631,7 +679,6 @@ REG ADD "HKLM\Software\Policies\Microsoft\Edge" /v DiagnosticData /t REG_DWORD /
 
 call :LOG Disabling Microsoft Recall from being enabled
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f
-
 
 ::call :LOG Wi-Fi Sense Disable affects devices autoconnecting - leaving enabled
 ::REG ADD "HKLM\software\microsoft\wcmsvc\wifinetworkmanager" /v wifisensecredshared /t REG_DWORD /d 0 /f
@@ -713,18 +760,17 @@ powershell -command "Get-AppxPackage MicrosoftWindows.Client.WebExperience -AllU
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser
 :PowerShell -ExecutionPolicy Unrestricted -Command "$taskPathPattern='\Microsoft\Windows\'; $taskNamePattern='Microsoft Compatibility Appraiser Exp'; Write-Output "^""Disabling tasks matching pattern `"^""$taskNamePattern`"^""."^""; $tasks = @(Get-ScheduledTask -TaskPath $taskPathPattern -TaskName $taskNamePattern -ErrorAction Ignore); if (-Not $tasks) {; Write-Output "^""Skipping, no tasks matching pattern `"^""$taskNamePattern`"^"" found, no action needed."^""; exit 0; }; $operationFailed = $false; foreach ($task in $tasks) {; $taskName = $task.TaskName; if ($task.State -eq [Microsoft.PowerShell.Cmdletization.GeneratedTypes.ScheduledTask.StateEnum]::Disabled) {; Write-Output "^""Skipping, task `"^""$taskName`"^"" is already disabled, no action needed."^""; continue; }; try {; $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null; Write-Output "^""Successfully disabled task `"^""$taskName`"^""."^""; } catch {; Write-Error "^""Failed to disable task `"^""$taskName`"^"": $($_.Exception.Message)"^""; $operationFailed = $true; }; }; if ($operationFailed) {; Write-Output 'Failed to disable some tasks. Check error messages above.'; exit 1; }"
 ::Disabling Scheduled Task Microsoft\Windows\Application Experience\ProgramDataUpdater
-::WARNING: Scheduled Task Microsoft\Windows\Application Experience\ProgramDataUpdater was not Found
+::Disabling Scheduled Task Microsoft\Windows\Application Experience\MareBackup
+::Disabling Scheduled Task Microsoft\Windows\Application Experience\StartupAppTask
+::Disabling Scheduled Task Microsoft\Windows\Application Experience\PcaPatchDbTask
 ::Disabling Scheduled Task Microsoft\Windows\Autochk\Proxy
 ::Disabling Scheduled Task Microsoft\Windows\Customer Experience Improvement Program\Consolidator
 ::Disabling Scheduled Task Microsoft\Windows\Customer Experience Improvement Program\UsbCeip
 ::Disabling Scheduled Task Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector
 ::Disabling Scheduled Task Microsoft\Windows\Feedback\Siuf\DmClient
 ::Disabling Scheduled Task Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload
-::Disabling Scheduled Task Microsoft\Windows\Windows Error Reporting\QueueReporting
-::Disabling Scheduled Task Microsoft\Windows\Application Experience\MareBackup
-::Disabling Scheduled Task Microsoft\Windows\Application Experience\StartupAppTask
-::Disabling Scheduled Task Microsoft\Windows\Application Experience\PcaPatchDbTask
 ::Disabling Scheduled Task Microsoft\Windows\Maps\MapsUpdateTask
+::Disabling Scheduled Task Microsoft\Windows\Windows Error Reporting\QueueReporting
 
 ::___________________________________________PENDING SECTION END___________________________________________
 
@@ -741,9 +787,9 @@ goto UserRegistryDeployment
 ::REG ADD "%BASE%\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f >nul 2>&1
 :: if errorlevel 1 call :Log ERROR setting ValueName for %BASE%
 :ApplySettings
-call :LOG ========================================================================
-call :LOG ==================== Begin per-user level tweaks =======================
-call :LOG ========================================================================
+
+call :LOG ========= Apply Tweaks to User Registry Hives and Default ==============
+
 call :LOG DEBUG ApplySettings called. Arg1=[%~1]
 set "BASE=%~1"
 if not defined BASE (
@@ -761,13 +807,15 @@ REG DELETE "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Sh
 REG ADD "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /f
 REG ADD "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" /v FolderType /t REG_SZ /d NotSpecified /f
 
-call :LOG Preference- Default Explorer to open at "This PC" as default instead of the quick menu - faster opt --2 is default quick access - and 3 is downloads
+call :LOG Preference- Default Explorer to open at "This PC" as default instead of the quick menu
+::--1 - fastest load --2 is default quick access - and 3 is downloads
 REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v LaunchTo /t REG_DWORD /d 1 /f
 
 call :LOG Disabling allowing Windows apps to run in the background systemwide
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f
 
 call :LOG Enabling Game Mode always on which helps further reduce background system resource usage
+::uses ~14mb ram but helps Processors with CCD technology and e-core parking
 REG ADD "%BASE%\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 1 /f
 
 call :LOG Preference -Enabling end task from Taskbar - super useful to avoid opening task manager just to end a stalled app
@@ -786,7 +834,8 @@ call :LOG Setting speed up menu show delay - Windows default is 400ms - why wait
 REG ADD "%BASE%\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 10 /f
 
 call :LOG Disabling some gaudi resource consuming desktop visual effects -explorer
-call :LOG Setting visual effects setting to custom - other options - default 0 - 1 best appearance - 2 best performance
+call :LOG Setting visual effects setting to custom
+:: 3 is custom - default 0 - 1 best appearance - 2 best performance but takes windows look to 1990
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 3 /f
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAnimations /t REG_DWORD /d 0 /f
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAI /t REG_DWORD /d 0 /f
@@ -1107,14 +1156,13 @@ call :LOG .
 call :LOG ****************************ALL FINISHED!******************************
 
 call :LOG A REBOOT IS HIGHLY RECOMMENDED FOR ALL THE SETTINGS TO APPLY PROPERLY
-choice /c YN /n /m "Restart now? [Y/N]: "
+choice /c YN /n /m "Restart now? [Y/N]: Default N in 10 seconds " /t 10 /d 2
 if errorlevel 2 goto :EXIT
 if errorlevel 1 goto :RESTART
 
 :RESTART
 shutdown.exe /r /t 0
 exit /b
-
 
 :EXIT
 endlocal
