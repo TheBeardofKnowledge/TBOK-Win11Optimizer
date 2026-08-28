@@ -24,13 +24,12 @@ ECHO Elevating permissions required for Admin access
 ECHO No changes are being made at this time.
 
 :checkPrivileges 
-	net session >nul 2>&1
-	if errorlevel 1 ( goto gotPrivileges ) else ( goto getPrivileges ) 
+NET FILE 1>NUL 2>NUL
+	if '%errorlevel%' == '0' ( goto gotPrivileges ) else ( goto getPrivileges ) 
 :getPrivileges
 :: Not elevated, so re-run with elevation
-    	powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"Start-Process -FilePath '%ComSpec%' -Verb RunAs -ArgumentList '/k ""%~f0"" %*'"
-    	exit /b
+	    powershell -Command "Start-Process -FilePath '%~dpnx0' -Verb RunAs"
+    exit /b
 :gotPrivileges 
 
 cls	
