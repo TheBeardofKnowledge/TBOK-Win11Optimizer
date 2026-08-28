@@ -1,34 +1,35 @@
 :: Hello - if youre reading this its because you dont just blindly apply scripts willy nilly
-:: and you want to know the meat and potatoes of what its doing - no TRUST ME BRO, LOGIC.
-:: I respect that, and honestly, it's the only way you should run a script you didn't make
-:: This script is a combination of my 25 plus years of IT experience with Windows as an IT admin
-:: While it is nothing slick or polished - it gets down to the essentials that I believe
-:: should be the standard in a Windows Install to function properly.
-:: The main issue I had with debloat and optimization scripts is that none of them did this:
-:: Apply the optimizations to all users of a pc and without breaking any features.
-:: The aim for this is to have a simple script you can either directly run on a pc, or 
-:: push to a machine on the network and have it automatically Optimize the system without you touching anything.
-:: No GUI,no decisions, just every good change that makes Windows run better and leaner, all in one go.
+:: and you want to know the meat and potatoes of what its doing - no TRUST ME BRO, LOGIC
+:: I respect that, and honestly, it's the only way you should run a script you didn't make"
+:: This script is a combination of my 25 plus years of IT experience with Windows as an IT admin"
+:: While it is nothing slick or polished - it gets down to the essentials that I believe"
+:: should be the standard in a Windows Install to function properly
+:: The main issue I had with debloat and optimization scripts is that none of them did this
+:: Apply the optimizations to all users of a pc and without breaking any features
+:: The aim for this is to have a simple script you can either directly run on a pc or
+:: push to a machine on the network and have it automatically Optimize the system without you touching anything
+:: No GUI no decision just every good change that makes Windows run better and leaner all in one go
 :: If you don't understand something here, just ask, my DM's and comments on social media are open
 :: If you have an issue or want to request a feature, please request it on GitHub
-:: If you want to learn more about each command, use what I use: https://learn.microsoft.com
-::READY? Lets go!
+:: If you want to learn more about each command, use what I use learn.microsoft.com
+:: READY... Lets go
 :: 
 ::turn off echoing all commands
 @ECHO OFF
 ::change the terminal color to something friendlier
 color f0
+
 :: Automatically check and get admin rights ::
 ECHO Elevating permissions required for Admin access
 ECHO No changes are being made at this time.
 
 :checkPrivileges 
-	NET FILE 1>NUL 2>NUL
-	if '%errorlevel%' == '0' ( goto gotPrivileges ) else ( goto getPrivileges ) 
+	net session >nul 2>&1
+	if errorlevel 1 ( goto gotPrivileges ) else ( goto getPrivileges ) 
 :getPrivileges
 :: Not elevated, so re-run with elevation
     	powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"Start-Process '%ComSpec%' -Verb RunAs -ArgumentList '/c ""%~f0"" %*'"
+"Start-Process -FilePath '%ComSpec%' -Verb RunAs -ArgumentList '/k ""%~f0"" %*'"
     	exit /b
 :gotPrivileges 
 
