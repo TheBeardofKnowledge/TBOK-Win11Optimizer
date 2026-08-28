@@ -150,7 +150,8 @@ call :LOG Should be disabled for desktops-especially with SSD or NVME
 		powercfg -h off
 		goto f8startup
 	:unknownchassis
-	call :LOG Unable to determine chassis type. Hibernation was not changed.
+	for /f "delims=" %%R in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-CimInstance -Query 'Select * From CIM_Chassis').ChassisTypes -join ','" 2^>NUL') do set "RawChassisType=%%R"
+	call :LOG Unable to determine chassis type (raw ChassisTypes=!RawChassisType!). Hibernation was not changed.
 	
 	
 :F8startup
@@ -172,7 +173,8 @@ powershell.exe -NoProfile -Command ^
     $ramMB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 0); ^
     Write-Output ('Detected RAM: ' + $ramMB + ' MB'); ^
     if ($ramMB -ge 32768) { ^
-        Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$true} ^| Out-Null; ^
+        $cs = Get-WmiObject Win32_ComputerSystem; ^
+        if (-not $cs.AutomaticManagedPagefile) { $cs.AutomaticManagedPagefile = $true; $cs.Put() ^| Out-Null }; ^
         Write-Output 'Configured Windows automatic pagefile management.'; ^
         exit 0; ^
     }; ^
@@ -182,16 +184,17 @@ powershell.exe -NoProfile -Command ^
         {$_ -lt 16384} { $max = [uint32]16384; break }; ^
         default { $max = [uint32]24576 } ^
     }; ^
-    Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$false} ^| Out-Null; ^
-    $pf = Get-CimInstance Win32_PageFileSetting -Filter 'Name=''C:\\pagefile.sys'''; ^
+    $cs = Get-WmiObject Win32_ComputerSystem; ^
+    if ($cs.AutomaticManagedPagefile) { $cs.AutomaticManagedPagefile = $false; $cs.Put() ^| Out-Null }; ^
+    $pf = Get-WmiObject Win32_PageFileSetting -Filter 'Name=''C:\\pagefile.sys'''; ^
     if ($pf) { ^
         if (($pf.InitialSize -eq $min) -and ($pf.MaximumSize -eq $max)) { ^
             Write-Output ('Already configured. Min=' + $min + ' MB Max=' + $max + ' MB'); ^
             exit 0; ^
         }; ^
-        Set-CimInstance -InputObject $pf -Property @{InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
+        $pf.InitialSize = $min; $pf.MaximumSize = $max; $pf.Put() ^| Out-Null; ^
     } else { ^
-        New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name='C:\pagefile.sys'; InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
+        Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{Name='C:\pagefile.sys'; InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
     }; ^
     Write-Output ('Configured pagefile: Initial=' + $min + ' MB Maximum=' + $max + ' MB'); ^
     Write-Output 'Reboot required for changes to take effect.'; ^
