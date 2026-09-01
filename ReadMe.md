@@ -1,8 +1,8 @@
-Yes... It's coming...
+Yes... It's here, it works
 
-An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, and computer technicians (but you can also use it for personal use).
+An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, and computer technicians (but you can also use it for personal use)... and it's already getting improvements thanks to your testing and feedback.
 
-Call this a "Make Windows 11 perform the way it should" script, but I'll likely change it to something more catchy, LOL.
+Call this a "Make Windows 11 perform the way it should be" script, but I'll likely change it to something more catchy, LOL.
 
 If you haven't noticed, Windows 11 is not quite optimized, in fact, it's very unnecessarily bloated.  We're not talking about special use cases here, we're talking about day to day use.
 What took 1 second in Windows 10 now takes 4 seconds in windows 11.  Multiply that by how many actions you run on a PC and you're talking about A LOT of wasted time. 
