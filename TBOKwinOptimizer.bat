@@ -171,7 +171,8 @@ call :LOG Should be disabled for desktops-especially with SSD or NVME
 		powercfg -h off
 		goto f8startup
 	:unknownchassis
-	call :LOG Unable to determine chassis type. Hibernation was not changed.
+	for /f "delims=" %%R in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "(Get-CimInstance -Query 'Select * From CIM_Chassis').ChassisTypes -join ','" 2^>NUL') do set "RawChassisType=%%R"
+	call :LOG Unable to determine chassis type (raw ChassisTypes=!RawChassisType!). Hibernation was not changed.
 	
 	
 :F8startup
@@ -194,7 +195,8 @@ powershell.exe -NoProfile -Command ^
     $ramMB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 0); ^
     Write-Output ('Detected RAM: ' + $ramMB + ' MB'); ^
     if ($ramMB -ge 32768) { ^
-        Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$true} ^| Out-Null; ^
+        $cs = Get-WmiObject Win32_ComputerSystem; ^
+        if (-not $cs.AutomaticManagedPagefile) { $cs.AutomaticManagedPagefile = $true; $cs.Put() ^| Out-Null }; ^
         Write-Output 'Configured Windows automatic pagefile management.'; ^
         exit 0; ^
     }; ^
@@ -204,16 +206,17 @@ powershell.exe -NoProfile -Command ^
         {$_ -lt 16384} { $max = [uint32]16384; break }; ^
         default { $max = [uint32]24576 } ^
     }; ^
-    Set-CimInstance -Query 'SELECT * FROM Win32_ComputerSystem' -Property @{AutomaticManagedPageFile=$false} ^| Out-Null; ^
-    $pf = Get-CimInstance Win32_PageFileSetting -Filter 'Name=''C:\\pagefile.sys'''; ^
+    $cs = Get-WmiObject Win32_ComputerSystem; ^
+    if ($cs.AutomaticManagedPagefile) { $cs.AutomaticManagedPagefile = $false; $cs.Put() ^| Out-Null }; ^
+    $pf = Get-WmiObject Win32_PageFileSetting -Filter 'Name=''C:\\pagefile.sys'''; ^
     if ($pf) { ^
         if (($pf.InitialSize -eq $min) -and ($pf.MaximumSize -eq $max)) { ^
             Write-Output ('Already configured. Min=' + $min + ' MB Max=' + $max + ' MB'); ^
             exit 0; ^
         }; ^
-        Set-CimInstance -InputObject $pf -Property @{InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
+        $pf.InitialSize = $min; $pf.MaximumSize = $max; $pf.Put() ^| Out-Null; ^
     } else { ^
-        New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name='C:\pagefile.sys'; InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
+        Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{Name='C:\pagefile.sys'; InitialSize=$min; MaximumSize=$max} ^| Out-Null; ^
     }; ^
     Write-Output ('Configured pagefile: Initial=' + $min + ' MB Maximum=' + $max + ' MB'); ^
     Write-Output 'Reboot required for changes to take effect.'; ^
@@ -302,30 +305,30 @@ call :SetServiceStartup Appinfo demand
 call :SetServiceStartup AssignedAccessManagerSvc demand
 call :SetServiceStartup AxInstSV demand
 call :SetServiceStartup BDESVC demand
-call :SetServiceStartup  BcastDVRUserService_* demand
-call :SetServiceStartup  BluetoothUserService_* demand
+call :SetServiceStartup  BcastDVRUserService demand
+call :SetServiceStartup  BluetoothUserService demand
 ::deprecated call :SetServiceStartup 'Browser' demand
 call :SetServiceStartup BTAGService demand
 call :SetServiceStartup bthserv demand
-call :SetServiceStartup  CaptureService_* demand
-call :SetServiceStartup  cbdhsvc_* demand
+call :SetServiceStartup  CaptureService demand
+call :SetServiceStartup  cbdhsvc demand
 ::deprecated call :SetServiceStartup CDPSvc demand
 call :SetServiceStartup CertPropSvc demand
 call :SetServiceStartup cloudidsvc demand
 call :SetServiceStartup COMSysApp demand
 call :SetServiceStartup  ClipSVC demand
-call :SetServiceStartup  ConsentUxUserSvc_* demand
-call :SetServiceStartup  CredentialEnrollmentManagerUserSvc_* demand
+call :SetServiceStartup  ConsentUxUserSvc demand
+call :SetServiceStartup  CredentialEnrollmentManagerUserSvc demand
 call :SetServiceStartup CscService demand
 call :SetServiceStartup  DcpSvc demand
 call :SetServiceStartup dcsvc demand
 call :SetServiceStartup defragsvc demand
 call :SetServiceStartup DevQueryBroker demand
-call :SetServiceStartup  DeviceAssociationBroker_* demand
+call :SetServiceStartup  DeviceAssociationBroker demand
 call :SetServiceStartup DeviceAssociationService demand
 call :SetServiceStartup DeviceInstall demand
-call :SetServiceStartup  DevicePickerUserSvc_* demand
-call :SetServiceStartup  DevicesFlowUserSvc_* demand
+call :SetServiceStartup  DevicePickerUserSvc demand
+call :SetServiceStartup  DevicesFlowUserSvc demand
 call :SetServiceStartup  diagnosticshub.standardcollector.service demand
 call :SetServiceStartup diagsvc demand
 call :SetServiceStartup DisplayEnhancementService demand
@@ -361,14 +364,14 @@ call :SetServiceStartup lltdsvc demand
 call :SetServiceStartup lmhosts demand
 call :SetServiceStartup LxpSvc demand
 call :SetServiceStartup McpManagementService demand
-call :SetServiceStartup  MessagingService_* demand
+call :SetServiceStartup  MessagingService demand
 call :SetServiceStartup MicrosoftEdgeElevationService demand
 call :SetServiceStartup  MixedRealityOpenXRSvc demand
 call :SetServiceStartup MSDTC demand
 call :SetServiceStartup MsKeyboardFilter demand
 call :SetServiceStartup MSiSCSI demand
 call :SetServiceStartup  msiserver demand
-call :SetServiceStartup  NPSMSvc_* demand
+call :SetServiceStartup  NPSMSvc demand
 call :SetServiceStartup NaturalAuthentication demand
 call :SetServiceStartup NcaSvc demand
 call :SetServiceStartup NcbService demand
@@ -381,21 +384,21 @@ call :SetServiceStartup  NgcSvc demand
 ::omitforENTERPRISE call :SetServiceStartup netprofm demand
 call :SetServiceStartup  p2pimsvc demand
 call :SetServiceStartup  p2psvc demand
-call :SetServiceStartup  P9RdrService_* demand
+call :SetServiceStartup  P9RdrService demand
 call :SetServiceStartup PcaSvc demand
 call :SetServiceStartup PeerDistSvc demand
-call :SetServiceStartup  PenService_* demand
+call :SetServiceStartup  PenService demand
 call :SetServiceStartup perceptionsimulation demand
 call :SetServiceStartup PerfHost demand
 call :SetServiceStartup PhoneSvc demand
-call :SetServiceStartup  PimIndexMaintenanceSvc_* demand
+call :SetServiceStartup  PimIndexMaintenanceSvc demand
 call :SetServiceStartup pla demand
 call :SetServiceStartup PlugPlay demand
 call :SetServiceStartup  PNRPAutoReg demand
 call :SetServiceStartup  PNRPsvc demand
 call :SetServiceStartup PolicyAgent demand
 call :SetServiceStartup PrintNotify demand
-call :SetServiceStartup  PrintWorkflowUserSvc_* demand
+call :SetServiceStartup  PrintWorkflowUserSvc demand
 call :SetServiceStartup PushToInstall demand
 call :SetServiceStartup QWAVE demand
 call :SetServiceStartup RasAuto demand
@@ -435,10 +438,10 @@ call :SetServiceStartup  TimeBrokerSvc demand
 ::omitforENTERPRISE call :SetServiceStartup TokenBroker demand
 call :SetServiceStartup TroubleshootingSvc demand
 call :SetServiceStartup  UI0Detect demand
-call :SetServiceStartup  UdkUserSvc_* demand
+call :SetServiceStartup  UdkUserSvc demand
 call :SetServiceStartup UmRdpService demand
-call :SetServiceStartup  UnistoreSvc_* demand
-call :SetServiceStartup  UserDataSvc_* demand
+call :SetServiceStartup  UnistoreSvc demand
+call :SetServiceStartup  UserDataSvc demand
 ::omitforENTERPRISE call :SetServiceStartup UsoSvc demand
 call :SetServiceStartup upnphost demand
 call :SetServiceStartup  VacSvc demand
@@ -493,7 +496,7 @@ call :SetServiceStartup BFE auto
 call :SetServiceStartup BITS auto
 call :SetServiceStartup BrokerInfrastructure auto
 call :SetServiceStartup BthHFSrv auto
-call :SetServiceStartup CDPUserSvc_* auto
+call :SetServiceStartup CDPUserSvc auto
 call :SetServiceStartup CoreMessagingRegistrar auto
 call :SetServiceStartup CryptSvc auto
 call :SetServiceStartup DPS auto
@@ -512,7 +515,7 @@ call :SetServiceStartup LanmanServer auto
 call :SetServiceStartup LanmanWorkstation auto
 call :SetServiceStartup MpsSvc auto
 call :SetServiceStartup nsi auto
-call :SetServiceStartup OneSyncSvc_* auto
+call :SetServiceStartup OneSyncSvc auto
 call :SetServiceStartup Power auto
 call :SetServiceStartup ProfSvc auto
 call :SetServiceStartup RpcEptMapper auto
@@ -537,7 +540,7 @@ call :SetServiceStartup Wcmsvc auto
 call :SetServiceStartup WinDefend auto
 call :SetServiceStartup Winmgmt auto
 call :SetServiceStartup WlanSvc auto
-call :SetServiceStartup WpnUserService_* auto
+call :SetServiceStartup WpnUserService auto
 ECHO.
 Call :LOG Changing less essential services to delayed-auto
 ::omit call :SetServiceStartup MapsBroker delayed-auto
@@ -995,7 +998,7 @@ call :LOG Starting per-user registry deployment...
 :: 1. CURRENTLY LOADED USERS
 :: ================================
 call :Log Processing loaded user hives
-for /f "delims=" %%U in ('reg query HKEY_USERS ^| findstr /R "HKEY_USERS\\S-1-5-21-"') do (
+for /f "delims=" %%U in ('reg query HKEY_USERS ^| findstr /R "HKEY_USERS\\S-1-5-21- HKEY_USERS\\S-1-12-1-"') do (
 ::echo Found User Hive: [%%U]
 call :ApplySettings "%%U"
 )
