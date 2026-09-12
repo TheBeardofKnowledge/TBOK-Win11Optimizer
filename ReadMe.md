@@ -1,3 +1,6 @@
+IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
+https://buymeacoffee.com/thebeardofl
+
 Yes... It's here, it works
 
 An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, and computer technicians (but you can also use it for personal use)... and it's already getting improvements thanks to your testing and feedback.
