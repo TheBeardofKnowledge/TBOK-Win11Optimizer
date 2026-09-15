@@ -26,8 +26,8 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.6"
-set "VERDATE=09-11-2026"
+set "VERSION=1.6.1"
+set "VERDATE=09-15-2026"
 
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
 echo No changes are being made at this time.
@@ -95,6 +95,202 @@ if exist "%TBOK_TASK_PLAN%" (
 goto :MENU
 
 :PrepareRollbackProtection
+:restorepoint
+call :LOG Before anything is modified - creating a system restore point.
+call :LOG Ensuring System Restore is enabled on %SystemDrive%...
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "try { Enable-ComputerRestore -Drive ($env:SystemDrive + '\') -ErrorAction Stop; exit 0 } catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }" ^
+    >>"%LOGFILE%" 2>&1
+
+set "RestoreEnableRC=!ERRORLEVEL!"
+
+if not "!RestoreEnableRC!"=="0" (
+    call :LOG WARNING: System Restore could not be enabled.
+) else (
+    call :LOG System Restore enablement command completed successfully.
+)
+
+call :LOG Checking restore-point support services...
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "try {" ^
+    "    foreach ($serviceName in 'VSS','swprv') {" ^
+    "        $serviceInfo = Get-CimInstance -ClassName Win32_Service -Filter ('Name=''' + $serviceName + '''') -ErrorAction Stop;" ^
+    "        if ($null -eq $serviceInfo) {" ^
+    "            throw ($serviceName + ' service was not found.');" ^
+    "        };" ^
+    "        Write-Output ($serviceName + ': State=' + $serviceInfo.State + '; StartMode=' + $serviceInfo.StartMode);" ^
+    "        if ($serviceInfo.StartMode -eq 'Disabled') {" ^
+    "            Write-Output ('Changing ' + $serviceName + ' from Disabled to Manual...');" ^
+    "            $scOutput = @(& sc.exe config $serviceName start= demand 2>&1);" ^
+    "            $scRC = $LASTEXITCODE;" ^
+    "            $scOutput | ForEach-Object { Write-Output $_ };" ^
+    "            if ($scRC -ne 0) {" ^
+    "                throw ('sc.exe config failed for ' + $serviceName + ' with exit code ' + $scRC);" ^
+    "            };" ^
+    "        };" ^
+    "    };" ^
+    "    $vss = Get-Service -Name VSS -ErrorAction Stop;" ^
+    "    if ($vss.Status -ne 'Running') {" ^
+    "        Write-Output 'Starting Volume Shadow Copy service...';" ^
+    "        Start-Service -Name VSS -ErrorAction Stop;" ^
+    "        $vss.WaitForStatus('Running', (New-TimeSpan -Seconds 15));" ^
+    "    };" ^
+    "    Write-Output 'Restore-point support services are prepared.';" ^
+    "    exit 0;" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: ' + $_.Exception.Message);" ^
+    "    exit 1;" ^
+    "}" >>"%LOGFILE%" 2>&1
+
+set "VssRC=!ERRORLEVEL!"
+
+if not "!VssRC!"=="0" (
+    call :LOG WARNING: Volume Shadow Copy service could not be prepared.
+)
+
+call :LOG Setting restore-point creation frequency override...
+set "RestoreFrequencyExisted=0"
+set "RestoreFrequencyValue="
+
+for /f "tokens=3" %%A in ('reg.exe query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency 2^>nul ^| findstr /I "SystemRestorePointCreationFrequency"') do (
+    set "RestoreFrequencyExisted=1"
+    set "RestoreFrequencyValue=%%A"
+)
+reg.exe add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" ^
+    /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f ^
+    >>"%LOGFILE%" 2>&1
+if errorlevel 1 (
+    call :LOG WARNING: Could not set SystemRestorePointCreationFrequency.
+)
+call :LOG Creating restore point...
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "try {" ^
+    "    Checkpoint-Computer -Description 'System Before TBOK Windows Optimizer' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop;" ^
+    "    Write-Output 'Restore point command completed successfully.';" ^
+    "    exit 0;" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: ' + $_.Exception.Message);" ^
+    "    exit 1;" ^
+    "}" >>"%LOGFILE%" 2>&1
+set "RestorePointRC=!ERRORLEVEL!"
+
+call :RestorePointFrequency
+set "RestoreFrequencyRC=!ERRORLEVEL!"
+
+if not "!RestoreFrequencyRC!"=="0" (
+    call :LOG WARNING: Restore-point creation frequency cleanup did not complete successfully.
+)
+if "!RestorePointRC!"=="0" (
+    set "TBOK_RESTORE_POINT_FAILED=0"
+    call :LOG Restore point created successfully.
+    exit /b 0
+)
+set "TBOK_RESTORE_POINT_FAILED=1"
+set "TBOK_PROFILE_BACKUP_DIR=%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
+call :LOG WARNING: Could not create a restore point.
+call :LOG Creating fallback registry backup directory...
+
+if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
+    mkdir "!TBOK_PROFILE_BACKUP_DIR!" >nul 2>&1
+)
+if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
+    call :LOG CRITICAL: Fallback registry backup directory could not be created.
+    set "TBOK_PROFILE_BACKUP_DIR="
+) else (
+    call :LOG Fallback registry backup directory: !TBOK_PROFILE_BACKUP_DIR!
+)
+call :LOG WARNING: Could not create a restore point.
+
+call :LOG Collecting restore-point diagnostics...
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "$diagnosticFailure = $false;" ^
+    "Write-Output 'System Restore diagnostics:';" ^
+    "try {" ^
+    "    $config = Get-CimInstance -Namespace root/default -ClassName SystemRestoreConfig -ErrorAction Stop;" ^
+    "    $config | Format-List *;" ^
+    "} catch {" ^
+    "    Write-Output ('WARNING: SystemRestoreConfig query failed: ' + $_.Exception.Message);" ^
+    "    $diagnosticFailure = $true;" ^
+    "};" ^
+    "Write-Output 'Existing restore points:';" ^
+    "try {" ^
+    "    $points = @(Get-ComputerRestorePoint -ErrorAction Stop | Select-Object -First 5 SequenceNumber,Description,CreationTime);" ^
+    "    if ($points.Count -eq 0) {" ^
+    "        Write-Output 'No existing restore points were returned.';" ^
+    "    } else {" ^
+    "        $points | Format-Table -AutoSize;" ^
+    "    };" ^
+    "} catch {" ^
+    "    Write-Output ('WARNING: Restore-point enumeration failed: ' + $_.Exception.Message);" ^
+    "    $diagnosticFailure = $true;" ^
+    "};" ^
+    "Write-Output 'Shadow storage:';" ^
+    "$shadowOutput = @(& vssadmin.exe list shadowstorage 2>&1);" ^
+    "$shadowRC = $LASTEXITCODE;" ^
+    "$shadowOutput | ForEach-Object { Write-Output $_ };" ^
+    "if ($shadowRC -ne 0) {" ^
+    "    Write-Output ('WARNING: vssadmin shadowstorage returned exit code ' + $shadowRC);" ^
+    "    $diagnosticFailure = $true;" ^
+    "};" ^
+    "Write-Output 'VSS writers:';" ^
+    "$writerOutput = @(& vssadmin.exe list writers 2>&1);" ^
+    "$writerRC = $LASTEXITCODE;" ^
+    "$writerOutput | ForEach-Object { Write-Output $_ };" ^
+    "if ($writerRC -ne 0) {" ^
+    "    Write-Output ('WARNING: vssadmin writers returned exit code ' + $writerRC);" ^
+    "    $diagnosticFailure = $true;" ^
+    "};" ^
+    "if ($diagnosticFailure) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
+
+set "RestoreDiagRC=!ERRORLEVEL!"
+
+if not "!RestoreDiagRC!"=="0" (
+    call :LOG WARNING: One or more restore-point diagnostic queries failed. Review the preceding log output.
+) else (
+    call :LOG Restore-point diagnostics completed successfully.
+)
+call :LOG Creating HKLM and HKCU registry exports as a fallback...
+
+set "HKLMBackupRC=1"
+set "HKCUBackupRC=1"
+
+if defined TBOK_PROFILE_BACKUP_DIR (
+    reg.exe export HKLM ^
+        "!TBOK_PROFILE_BACKUP_DIR!\HKLM-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
+
+    set "HKLMBackupRC=!ERRORLEVEL!"
+
+    reg.exe export HKCU ^
+        "!TBOK_PROFILE_BACKUP_DIR!\HKCU-ExecutionAccount-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
+
+    set "HKCUBackupRC=!ERRORLEVEL!"
+) else (
+    call :LOG CRITICAL: HKLM and HKCU registry exports were skipped because the fallback backup directory is unavailable.
+)
+
+if "!HKLMBackupRC!"=="0" (
+    call :LOG HKLM registry export completed successfully.
+) else (
+    call :LOG ERROR: HKLM registry export failed with exit code !HKLMBackupRC!.
+)
+
+if "!HKCUBackupRC!"=="0" (
+    call :LOG HKCU registry export completed successfully.
+) else (
+    call :LOG ERROR: HKCU registry export failed with exit code !HKCUBackupRC!.
+)
+
+if not "!HKLMBackupRC!!HKCUBackupRC!"=="00" (
+    call :LOG CRITICAL: Restore-point creation failed and one or more registry exports also failed.
+    call :LOG You may not have a complete method to restore the previous settings.
+) else (
+    call :LOG Registry fallback exports completed successfully.
+)
+
+:RestoreProtectionComplete
+exit /b 0
 
 ::This line is called to modify a service startup mode
 :SetServiceStartup
@@ -556,201 +752,9 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "Get-CimInstance -ClassName Win32_ComputerSystemProduct | Select-Object Vendor, Name, IdentifyingNumber" ^
     >>"%LOGFILE%" 2>&1
 
-:restorepoint
-call :LOG Before anything is modified - creating a system restore point.
-call :LOG Ensuring System Restore is enabled on %SystemDrive%...
+::call the restorepoint creation and registry export helper to ensure you can roll back the changes if needed.
+call :PrepareRollbackProtection
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "try { Enable-ComputerRestore -Drive ($env:SystemDrive + '\') -ErrorAction Stop; exit 0 } catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }" ^
-    >>"%LOGFILE%" 2>&1
-
-set "RestoreEnableRC=!ERRORLEVEL!"
-
-if not "!RestoreEnableRC!"=="0" (
-    call :LOG WARNING: System Restore could not be enabled.
-) else (
-    call :LOG System Restore enablement command completed successfully.
-)
-
-call :LOG Checking restore-point support services...
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "try {" ^
-    "    foreach ($serviceName in 'VSS','swprv') {" ^
-    "        $serviceInfo = Get-CimInstance -ClassName Win32_Service -Filter ('Name=''' + $serviceName + '''') -ErrorAction Stop;" ^
-    "        if ($null -eq $serviceInfo) {" ^
-    "            throw ($serviceName + ' service was not found.');" ^
-    "        };" ^
-    "        Write-Output ($serviceName + ': State=' + $serviceInfo.State + '; StartMode=' + $serviceInfo.StartMode);" ^
-    "        if ($serviceInfo.StartMode -eq 'Disabled') {" ^
-    "            Write-Output ('Changing ' + $serviceName + ' from Disabled to Manual...');" ^
-    "            $scOutput = @(& sc.exe config $serviceName start= demand 2>&1);" ^
-    "            $scRC = $LASTEXITCODE;" ^
-    "            $scOutput | ForEach-Object { Write-Output $_ };" ^
-    "            if ($scRC -ne 0) {" ^
-    "                throw ('sc.exe config failed for ' + $serviceName + ' with exit code ' + $scRC);" ^
-    "            };" ^
-    "        };" ^
-    "    };" ^
-    "    $vss = Get-Service -Name VSS -ErrorAction Stop;" ^
-    "    if ($vss.Status -ne 'Running') {" ^
-    "        Write-Output 'Starting Volume Shadow Copy service...';" ^
-    "        Start-Service -Name VSS -ErrorAction Stop;" ^
-    "        $vss.WaitForStatus('Running', (New-TimeSpan -Seconds 15));" ^
-    "    };" ^
-    "    Write-Output 'Restore-point support services are prepared.';" ^
-    "    exit 0;" ^
-    "} catch {" ^
-    "    Write-Output ('ERROR: ' + $_.Exception.Message);" ^
-    "    exit 1;" ^
-    "}" >>"%LOGFILE%" 2>&1
-
-set "VssRC=!ERRORLEVEL!"
-
-if not "!VssRC!"=="0" (
-    call :LOG WARNING: Volume Shadow Copy service could not be prepared.
-)
-
-call :LOG Setting restore-point creation frequency override...
-set "RestoreFrequencyExisted=0"
-set "RestoreFrequencyValue="
-
-for /f "tokens=3" %%A in ('reg.exe query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency 2^>nul ^| findstr /I "SystemRestorePointCreationFrequency"') do (
-    set "RestoreFrequencyExisted=1"
-    set "RestoreFrequencyValue=%%A"
-)
-reg.exe add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" ^
-    /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f ^
-    >>"%LOGFILE%" 2>&1
-if errorlevel 1 (
-    call :LOG WARNING: Could not set SystemRestorePointCreationFrequency.
-)
-call :LOG Creating restore point...
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "try {" ^
-    "    Checkpoint-Computer -Description 'System Before TBOK Windows Optimizer' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop;" ^
-    "    Write-Output 'Restore point command completed successfully.';" ^
-    "    exit 0;" ^
-    "} catch {" ^
-    "    Write-Output ('ERROR: ' + $_.Exception.Message);" ^
-    "    exit 1;" ^
-    "}" >>"%LOGFILE%" 2>&1
-set "RestorePointRC=!ERRORLEVEL!"
-
-call :RestorePointFrequency
-set "RestoreFrequencyRC=!ERRORLEVEL!"
-
-if not "!RestoreFrequencyRC!"=="0" (
-    call :LOG WARNING: Restore-point creation frequency cleanup did not complete successfully.
-)
-if "!RestorePointRC!"=="0" (
-    set "TBOK_RESTORE_POINT_FAILED=0"
-    call :LOG Restore point created successfully.
-    goto :RestoreProtectionComplete
-)
-set "TBOK_RESTORE_POINT_FAILED=1"
-set "TBOK_PROFILE_BACKUP_DIR=%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
-call :LOG WARNING: Could not create a restore point.
-call :LOG Creating fallback registry backup directory...
-
-if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
-    mkdir "!TBOK_PROFILE_BACKUP_DIR!" >nul 2>&1
-)
-if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
-    call :LOG CRITICAL: Fallback registry backup directory could not be created.
-    set "TBOK_PROFILE_BACKUP_DIR="
-) else (
-    call :LOG Fallback registry backup directory: !TBOK_PROFILE_BACKUP_DIR!
-)
-call :LOG WARNING: Could not create a restore point.
-
-call :LOG Collecting restore-point diagnostics...
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$diagnosticFailure = $false;" ^
-    "Write-Output 'System Restore diagnostics:';" ^
-    "try {" ^
-    "    $config = Get-CimInstance -Namespace root/default -ClassName SystemRestoreConfig -ErrorAction Stop;" ^
-    "    $config | Format-List *;" ^
-    "} catch {" ^
-    "    Write-Output ('WARNING: SystemRestoreConfig query failed: ' + $_.Exception.Message);" ^
-    "    $diagnosticFailure = $true;" ^
-    "};" ^
-    "Write-Output 'Existing restore points:';" ^
-    "try {" ^
-    "    $points = @(Get-ComputerRestorePoint -ErrorAction Stop | Select-Object -First 5 SequenceNumber,Description,CreationTime);" ^
-    "    if ($points.Count -eq 0) {" ^
-    "        Write-Output 'No existing restore points were returned.';" ^
-    "    } else {" ^
-    "        $points | Format-Table -AutoSize;" ^
-    "    };" ^
-    "} catch {" ^
-    "    Write-Output ('WARNING: Restore-point enumeration failed: ' + $_.Exception.Message);" ^
-    "    $diagnosticFailure = $true;" ^
-    "};" ^
-    "Write-Output 'Shadow storage:';" ^
-    "$shadowOutput = @(& vssadmin.exe list shadowstorage 2>&1);" ^
-    "$shadowRC = $LASTEXITCODE;" ^
-    "$shadowOutput | ForEach-Object { Write-Output $_ };" ^
-    "if ($shadowRC -ne 0) {" ^
-    "    Write-Output ('WARNING: vssadmin shadowstorage returned exit code ' + $shadowRC);" ^
-    "    $diagnosticFailure = $true;" ^
-    "};" ^
-    "Write-Output 'VSS writers:';" ^
-    "$writerOutput = @(& vssadmin.exe list writers 2>&1);" ^
-    "$writerRC = $LASTEXITCODE;" ^
-    "$writerOutput | ForEach-Object { Write-Output $_ };" ^
-    "if ($writerRC -ne 0) {" ^
-    "    Write-Output ('WARNING: vssadmin writers returned exit code ' + $writerRC);" ^
-    "    $diagnosticFailure = $true;" ^
-    "};" ^
-    "if ($diagnosticFailure) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
-
-set "RestoreDiagRC=!ERRORLEVEL!"
-
-if not "!RestoreDiagRC!"=="0" (
-    call :LOG WARNING: One or more restore-point diagnostic queries failed. Review the preceding log output.
-) else (
-    call :LOG Restore-point diagnostics completed successfully.
-)
-call :LOG Creating HKLM and HKCU registry exports as a fallback...
-
-set "HKLMBackupRC=1"
-set "HKCUBackupRC=1"
-
-if defined TBOK_PROFILE_BACKUP_DIR (
-    reg.exe export HKLM ^
-        "!TBOK_PROFILE_BACKUP_DIR!\HKLM-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
-
-    set "HKLMBackupRC=!ERRORLEVEL!"
-
-    reg.exe export HKCU ^
-        "!TBOK_PROFILE_BACKUP_DIR!\HKCU-ExecutionAccount-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
-
-    set "HKCUBackupRC=!ERRORLEVEL!"
-) else (
-    call :LOG CRITICAL: HKLM and HKCU registry exports were skipped because the fallback backup directory is unavailable.
-)
-
-if "!HKLMBackupRC!"=="0" (
-    call :LOG HKLM registry export completed successfully.
-) else (
-    call :LOG ERROR: HKLM registry export failed with exit code !HKLMBackupRC!.
-)
-
-if "!HKCUBackupRC!"=="0" (
-    call :LOG HKCU registry export completed successfully.
-) else (
-    call :LOG ERROR: HKCU registry export failed with exit code !HKCUBackupRC!.
-)
-
-if not "!HKLMBackupRC!!HKCUBackupRC!"=="00" (
-    call :LOG CRITICAL: Restore-point creation failed and one or more registry exports also failed.
-    call :LOG You may not have a complete method to restore the previous settings.
-) else (
-    call :LOG Registry fallback exports completed successfully.
-)
-
-:RestoreProtectionComplete
 ECHO.
 ECHO.
 call :LOG **********************************************************
@@ -1819,6 +1823,10 @@ goto UserRegistryDeployment
 ::example
 ::REG ADD "%BASE%\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f >nul 2>&1
 :: if errorlevel 1 call :Log ERROR setting ValueName for %BASE%
+
+::call the restorepoint creation and registry export helper to ensure you can roll back the changes if needed.
+call :PrepareRollbackProtection
+
 :ApplySettings
 
 call :LOG ========= Apply Tweaks to User Registry Hives and Default ==============
@@ -2288,6 +2296,9 @@ call :LOG **********************************************************
 call :LOG        Begin Gaming Tweaks Registry Improvements        
 call :LOG **********************************************************
 call :LOG 
+
+::call the restorepoint creation and registry export helper to ensure you can roll back the changes if needed.
+call :PrepareRollbackProtection
 
 call :LOG Reset and Redetect Windows HPET dependency -High Precision Event Timer- - fixes issue where HPET was not detected properly
 bcdedit.exe /deletevalue useplatformclock >nul 2>&1
