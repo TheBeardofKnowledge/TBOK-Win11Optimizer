@@ -62,11 +62,11 @@ So what does it do?
    16. Enables verbose logon and logoff messages so you can know what your system is doing
 
 6. Bloat Removal
-  1. Removes MS Co-Pilot standard version systemwide and disables auto reinstall/enable
-  2. Removes Bing Search systemwide
-  3. Removes Taskbar Widgets that load a full web browser in RAM even if you don't use it
-  4. Removes the WebExperienceHost package that MS uses to push content
-  5. Disables Various Wasteful scheduled tasks that autorun even without consent
+  A. Removes MS Co-Pilot standard version systemwide and disables auto reinstall/enable
+  B. Removes Bing Search systemwide
+  C. Removes Taskbar Widgets that load a full web browser in RAM even if you don't use it
+  D. Removes the WebExperienceHost package that MS uses to push content
+  E. Disables Various Wasteful scheduled tasks that autorun even without consent
 
 7. User Level Registry Improvements (applied to all users, including default profile)
    This is what most optimization and debloat utilities get wrong - they only apply it to the current user
