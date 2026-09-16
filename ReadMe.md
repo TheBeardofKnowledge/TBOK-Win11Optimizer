@@ -69,7 +69,7 @@ So what does it do?
    5. Disables Various Wasteful scheduled tasks that autorun even without consent
 
 7. User Level Registry Improvements (applied to all users, including default profile)
-   This is what most optimization and debloat utilities get wrong - they only apply it to the current user
+   This is what most optimization and debloat utilities get wrong - they only apply it to the current user, when MS clearly made bloat & data collection per user.
    1. Disables custom folder view that causes lag for explorer startup
    2. Sets "This PC" as the default explorer view
    3. Disable allow apps to run in the background (even when closed)
