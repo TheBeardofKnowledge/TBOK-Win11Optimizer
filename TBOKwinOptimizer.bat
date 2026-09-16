@@ -366,6 +366,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "$matchedCount = 0;" ^
     "$changedCount = 0;" ^
     "$alreadyConfiguredCount = 0;" ^
+	"$preservedDisabledCount = 0;" ^
     "$notInstalledCount = 0;" ^
     "$duplicateCount = 0;" ^
     "$failureCount = 0;" ^
@@ -415,7 +416,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "                default { ([string]$serviceInfo.StartMode).ToLowerInvariant() }" ^
     "            };" ^
     "            if ($currentMode -eq 'auto') {" ^
-    "                $serviceRegistryPath = 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\' + $service.Name;" ^
+	"                $serviceRegistryPath = 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\' + $service.Name;" ^
 	"                $delayedAutoStart = 0;" ^
 	"                try {" ^
 	"                    $delayedAutoStart = Get-ItemPropertyValue -LiteralPath $serviceRegistryPath -Name DelayedAutoStart -ErrorAction Stop;" ^
@@ -425,8 +426,14 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 	"                if ($delayedAutoStart -eq 1) {" ^
 	"                    $currentMode = 'delayed-auto';" ^
 	"                };" ^
-	"			};" ^
-    "            if ($currentMode -eq $requestedMode) {" ^
+	"            };" ^
+	"            if ($currentMode -eq 'disabled' -and $requestedMode -eq 'demand') {" ^
+	"                Write-Output ('PRESERVED DISABLED: ' + $service.DisplayName + ' [' + $service.Name + '] -> requested demand);" ^
+	"                $configured[$key] = 'disabled';" ^
+	"                $preservedDisabledCount++;" ^
+	"                continue;" ^
+	"            };" ^
+	"            if ($currentMode -eq $requestedMode) {" ^
     "                Write-Output ('ALREADY CONFIGURED: ' + $service.DisplayName + ' [' + $service.Name + '] -> ' + $requestedMode);" ^
     "                $configured[$key] = $requestedMode;" ^
     "                $alreadyConfiguredCount++;" ^
@@ -455,8 +462,9 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "Write-Output ('  Requests: ' + $requestCount);" ^
     "Write-Output ('  Installed services matched: ' + $matchedCount);" ^
     "Write-Output ('  Changed: ' + $changedCount);" ^
-    "Write-Output ('  Already configured: ' + $alreadyConfiguredCount);" ^
-    "Write-Output ('  Not installed: ' + $notInstalledCount);" ^
+	"Write-Output ('  Already configured: ' + $alreadyConfiguredCount);" ^
+	"Write-Output ('  Preserved disabled: ' + $preservedDisabledCount);" ^
+	"Write-Output ('  Not installed: ' + $notInstalledCount);" ^
     "Write-Output ('  Duplicate requests: ' + $duplicateCount);" ^
     "Write-Output ('  Failed: ' + $failureCount);" ^
     "if ($failureCount -gt 0) { exit 1 } else { exit 0 }" ^
@@ -1926,7 +1934,6 @@ if errorlevel 1 (
 call :LOG **********************************************************
 call :LOG        Enabling User-level Registry Improvements        
 call :LOG **********************************************************
-call :PrepareRollbackProtection
 goto UserRegistryDeployment
 :: ===============================================================
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
