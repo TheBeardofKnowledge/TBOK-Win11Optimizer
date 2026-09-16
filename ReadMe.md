@@ -33,8 +33,8 @@ It disables and permanently removes common "bloat" including things like co-pilo
 The script creates a system restore point before anything is touched, and if that fails, it creates a registry export of the current registry settings as a fallback failsafe.
 
 So what does it do?
-1. Disables "Fast Startup" aka hibernation mode for desktops
-2. Restores the F8 startup menu option
+1. Disables "Fast Startup" aka hibernation mode for desktops (keep enabled for laptops)
+2. Restores the F8 startup boot menu option (why do we have to crash windows 2 times to get it?)
 3. Properly configures virtual memory settings to avoid lag from expansion
 4. Services:
    1. Disables a few unnecessary services from startup
@@ -43,7 +43,7 @@ So what does it do?
    4. Ensures required windows services are set to automatic startup
    5. Configures less essential services to delayed startup
   
-5. Registry Improvements
+5. System Wide Registry Improvements
    1. Disables Windows Network Throttling
    2. Fixes IRP stack size for better network flow and modern networks
    3. Improve system responsiveness
@@ -53,9 +53,73 @@ So what does it do?
    7. Disables Webview mode from Windows Search, returning classic search
    8. Disables known Telemitry Data Collection
    9. Disables the Windows OOBE Privacy Settings Experience prompt for new users.
-   10. 
+   10. Disables the lock screen that includes Microsoft ads
+   11. Disables the WPBT feature that allows vendors to execute programs at boot
+   12. Fixes the Network Data Usage Graph not working
+   13. Disables various system telemetry
+   14. Disables various intrusive MS Edge settings, including background startup
+   15. Disables MS Recall from being auto enabled
+   16. Enables verbose logon and logoff messages so you can know what your system is doing
 
+6. Bloat Removal
+  1. Removes MS Co-Pilot standard version systemwide and disables auto reinstall/enable
+  2. Removes Bing Search systemwide
+  3. Removes Taskbar Widgets that load a full web browser in RAM even if you don't use it
+  4. Removes the WebExperienceHost package that MS uses to push content
+  5. Disables Various Wasteful scheduled tasks that autorun even without consent
 
+7. User Level Registry Improvements (applied to all users, including default profile)
+   This is what most optimization and debloat utilities get wrong - they only apply it to the current user
+   1. Disables custom folder view that causes lag for explorer startup
+   2. Sets "This PC" as the default explorer view
+   3. Disable allow apps to run in the background (even when closed)
+   4. Force Auto Enable Game Mode which helps reduce background apps
+   5. Enable right-click "End Task" feature from taskbar
+   6. Restore Full Context menu right-click menu
+   7. Disable web search in start menu search
+   8. Allow pinning more apps in the start menu
+   9. Speed up "show menu" delay for classic apps
+   10. Disable some gaudy desktop visual effects and animations that affect reaction time
+   11. Disable Ad spaces (The OS is NOT a billboard Microsoft)
+      1. Disable Explorer Search box suggestions
+      2. Disable File Explorer sync provider ads
+      3. Disable reoccurring "finish setup" ad suggestions to "get the most out of windows"
+      4. Disable lock screen tips and ads
+      5. Disable Ad Personalization (tracking)
+      6. Disable Welcome Experience Ads
+      7. Disable Settings ads
+      8. Disable auto install of suggested apps (related to #3 above)
+      9. Disable General tips and ads (why are these together Microsoft?)
+      10. Disable home screen ads
+      11. Disable Timeline Suggestions ads
+      12. Disable Windows Content Delivery
+      13. Disable automatic enabling of OEM and Preinstalled apps
+      14. Disable Diagnostic Feedback frequency and "Tailored Experiences"
+      15. Disable the Windows Feeds as policy or standard
+      16. Disable the Start Menu ads
+      17. Disable the Tailored Experiences with Telemetry feature
+   12. Disable the Task View button in the taskbar - wasted space and same as alt+tab
+   13. Disable the People button in the taskbar (auto launches teams)
+   14. Enable the taskbar end tasks feature (related to #5 above)
+   15. Hide the "meet now" button in the taskbar (related to #13 above)
+   16. Set the taskbar search box for icon only for less wasted space (works the same)
+   17. Disable Cross-device resume (optional, but skip this if you use "your phone"
+   18. Disable MS Copilot (standard, not M365 co-pilot)
+   19. Disable Microsoft Office logging
+   20. Disable Microsoft Office Client Telemetry and verbose logging
+   21. Disable Microsoft Office "Customer Experience Program"
+   22. Disable Microsoft Office Feedback
+   23. Disable MS Sticky keys hotkey because leaving something on shift is as bad as caps lock
+
+8. Gaming Improvements
+   1. Reset High Precision Event Timer preconfigured so Windows will redetect on next boot
+   2. Enable Hardware Accelerated GPU scheduling (will only work if your hardware supports HAGS)
+   3. Enable Optimizations for Windowed Games
+   4. Increase system responsiveness for Games
+   5. Set improved MMCS values for Windowed Games and Audio Apps
+   6. Desktop - Disable Power Throttling and Lazy Mode
+   7. Desktop - Enable Ultimate Performance Power Plan
+   NORE TO COME, but they need testing.
 
 
 
