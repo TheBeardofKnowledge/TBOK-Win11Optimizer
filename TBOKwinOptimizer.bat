@@ -26,8 +26,8 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.6.1"
-set "VERDATE=09-15-2026"
+set "VERSION=1.6.2"
+set "VERDATE=09-16-2026"
 
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
 echo No changes are being made at this time.
@@ -416,7 +416,12 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "            };" ^
     "            if ($currentMode -eq 'auto') {" ^
     "                $serviceRegistryPath = 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\' + $service.Name;" ^
-	"                $delayedAutoStart = Get-ItemPropertyValue -LiteralPath $serviceRegistryPath -Name DelayedAutoStart -ErrorAction SilentlyContinue;" ^
+	"                $delayedAutoStart = 0;" ^
+	"                try {" ^
+	"                    $delayedAutoStart = Get-ItemPropertyValue -LiteralPath $serviceRegistryPath -Name DelayedAutoStart -ErrorAction Stop;" ^
+	"                } catch {" ^
+	"                    $delayedAutoStart = 0;" ^
+	"                };" ^
 	"                if ($delayedAutoStart -eq 1) {" ^
 	"                    $currentMode = 'delayed-auto';" ^
 	"                };" ^
@@ -690,6 +695,108 @@ endlocal
 call :LOG Removed the temporary SystemRestorePointCreationFrequency override.
 exit /b 0
 
+:: Capture a Windows memory snapshot and write it to the console and logfile.
+:: Usage:
+:: call :CaptureMemorySnapshot "BEFORE"
+:: call :CaptureMemorySnapshot "AFTER"
+
+:CaptureMemorySnapshot
+setlocal DisableDelayedExpansion
+
+set "TBOK_MEMORY_LABEL=%~1"
+
+if not defined TBOK_MEMORY_LABEL (
+    set "TBOK_MEMORY_LABEL=UNLABELED"
+)
+
+set "TBOK_MEMORY_FILE=%TEMP%\TBOK-Memory-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "$ErrorActionPreference = 'Stop';" ^
+    "try {" ^
+    "    $label = $env:TBOK_MEMORY_LABEL;" ^
+    "    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop;" ^
+    "    $computer = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop;" ^
+    "    $memory = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop;" ^
+    "    $processes = @(Get-Process -ErrorAction SilentlyContinue);" ^
+    "    $svchost = @($processes | Where-Object { $_.ProcessName -eq 'svchost' });" ^
+    "    $totalInstalledBytes = [double]$computer.TotalPhysicalMemory;" ^
+    "    $totalVisibleBytes = [double]$os.TotalVisibleMemorySize * 1KB;" ^
+    "    $availableBytes = [double]$memory.AvailableBytes;" ^
+    "    $usedVisibleBytes = $totalVisibleBytes - $availableBytes;" ^
+    "    $hardwareReservedBytes = $totalInstalledBytes - $totalVisibleBytes;" ^
+    "    if ($hardwareReservedBytes -lt 0) { $hardwareReservedBytes = 0 };" ^
+    "    $committedBytes = [double]$memory.CommittedBytes;" ^
+    "    $commitLimitBytes = [double]$memory.CommitLimit;" ^
+    "    $physicalUsedPercent = 0;" ^
+    "    $commitUsedPercent = 0;" ^
+    "    if ($totalVisibleBytes -gt 0) {" ^
+    "        $physicalUsedPercent = ($usedVisibleBytes / $totalVisibleBytes) * 100;" ^
+    "    };" ^
+    "    if ($commitLimitBytes -gt 0) {" ^
+    "        $commitUsedPercent = ($committedBytes / $commitLimitBytes) * 100;" ^
+    "    };" ^
+    "    $svchostWorkingSet = ($svchost | Measure-Object -Property WorkingSet64 -Sum).Sum;" ^
+    "    $svchostPrivate = ($svchost | Measure-Object -Property PrivateMemorySize64 -Sum).Sum;" ^
+    "    if ($null -eq $svchostWorkingSet) { $svchostWorkingSet = 0 };" ^
+    "    if ($null -eq $svchostPrivate) { $svchostPrivate = 0 };" ^
+    "    $compressionProcess = Get-Process -Name 'Memory Compression' -ErrorAction SilentlyContinue;" ^
+    "    $compressionWorkingSet = 0;" ^
+    "    if ($null -ne $compressionProcess) {" ^
+    "        $compressionWorkingSet = ($compressionProcess | Measure-Object -Property WorkingSet64 -Sum).Sum;" ^
+    "    };" ^
+    "    Write-Output '================================================================';" ^
+    "    Write-Output ('MEMORY SNAPSHOT: ' + $label);" ^
+    "    Write-Output ('Captured: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'));" ^
+    "    Write-Output '================================================================';" ^
+    "    Write-Output ('Installed physical memory : {0:N2} GB' -f ($totalInstalledBytes / 1GB));" ^
+    "    Write-Output ('Usable physical memory    : {0:N2} GB' -f ($totalVisibleBytes / 1GB));" ^
+    "    Write-Output ('Physical memory in use    : {0:N2} GB ({1:N1} percent)' -f ($usedVisibleBytes / 1GB), $physicalUsedPercent);" ^
+    "    Write-Output ('Available physical memory : {0:N2} GB' -f ($availableBytes / 1GB));" ^
+    "    Write-Output ('Hardware reserved memory  : {0:N0} MB' -f ($hardwareReservedBytes / 1MB));" ^
+    "    Write-Output ('Committed memory          : {0:N2} GB' -f ($committedBytes / 1GB));" ^
+    "    Write-Output ('Commit limit              : {0:N2} GB' -f ($commitLimitBytes / 1GB));" ^
+    "    Write-Output ('Commit utilization        : {0:N1} percent' -f $commitUsedPercent);" ^
+    "    Write-Output ('System cache              : {0:N0} MB' -f ([double]$memory.CacheBytes / 1MB));" ^
+    "    Write-Output ('Paged pool                : {0:N0} MB' -f ([double]$memory.PoolPagedBytes / 1MB));" ^
+    "    Write-Output ('Nonpaged pool             : {0:N0} MB' -f ([double]$memory.PoolNonpagedBytes / 1MB));" ^
+    "    Write-Output ('Memory compression        : {0:N0} MB' -f ([double]$compressionWorkingSet / 1MB));" ^
+    "    Write-Output ('Running processes         : ' + $processes.Count);" ^
+    "    Write-Output ('svchost process count     : ' + $svchost.Count);" ^
+    "    Write-Output ('svchost working set       : {0:N0} MB' -f ([double]$svchostWorkingSet / 1MB));" ^
+    "    Write-Output ('svchost private memory    : {0:N0} MB' -f ([double]$svchostPrivate / 1MB));" ^
+    "    Write-Output '';" ^
+    "    Write-Output 'Top processes by working set:';" ^
+    "    $topProcesses = @($processes | Sort-Object -Property WorkingSet64 -Descending | Select-Object -First 10);" ^
+    "    foreach ($process in $topProcesses) {" ^
+    "        Write-Output ('  {0,-28} PID={1,-7} WorkingSet={2,7:N0} MB Private={3,7:N0} MB' -f $process.ProcessName, $process.Id, ($process.WorkingSet64 / 1MB), ($process.PrivateMemorySize64 / 1MB));" ^
+    "    };" ^
+    "    Write-Output '================================================================';" ^
+    "    exit 0;" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: Memory snapshot failed: ' + $_.Exception.Message);" ^
+    "    exit 1;" ^
+    "}" >"%TBOK_MEMORY_FILE%" 2>&1
+
+set "TBOK_MEMORY_RC=%ERRORLEVEL%"
+
+if exist "%TBOK_MEMORY_FILE%" (
+    for /f "usebackq delims=" %%M in ("%TBOK_MEMORY_FILE%") do (
+        call :LOG %%M
+    )
+
+    del /q "%TBOK_MEMORY_FILE%" >nul 2>&1
+)
+
+if not "%TBOK_MEMORY_RC%"=="0" (
+    endlocal
+    call :LOG WARNING: Memory snapshot "%~1" failed with exit code %TBOK_MEMORY_RC%.
+    exit /b 1
+)
+
+endlocal
+exit /b 0
+
 :: Helper for Chassis type detection to avoid enabling desktop tweaks on a device with a battery
 :: Returns Laptop, Desktop, or Unknown in CHASSISTYPE
 :GetChassisType
@@ -729,28 +836,35 @@ ECHO             Version %version% %verdate%
 ECHO.
 ECHO Please choose
 ECHO 1. Apply system and user level improvements -RECOMMENDED START*Default Autorun*
-ECHO 2. Apply only user level improvements
+ECHO 2. Run BeardSweeper Ultimate Disk and Cache Cleanup routine
 ECHO 3. Apply only gaming tweaks - for desktops only
-ECHO 4. EXIT
+ECHO 4. Update all apps using WinGet
+ECHO 5. EXIT
 ECHO.
 ECHO IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
 ECHO "https://buymeacoffee.com/thebeardofl"
 ECHO.
 ECHO ============================================================
 CHOICE /c 1234 /n /m "Enter 1-4: (Default: 1 in 10 seconds): " /t 10 /d 1
-if errorlevel 4 goto :EXIT
+if errorlevel 5 goto :EXIT
+if errorlevel 4 goto :WinGet
 if errorlevel 3 goto :GamingTweaks
-if errorlevel 2 goto :UserTweaks
+if errorlevel 2 goto :BeardSweeper
 if errorlevel 1 goto :SystemTweaks
 
 :SYSTEMTWEAKS
 ECHO Creating Log file and adding system information
 call :LOG Detected:
-ver >> "%LOGFILE%"
+
+ver >>"%LOGFILE%"
 systeminfo | findstr /B /C:"OS Name" /C:"OS Version" >>"%LOGFILE%" 2>&1
+
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "Get-CimInstance -ClassName Win32_ComputerSystemProduct | Select-Object Vendor, Name, IdentifyingNumber" ^
     >>"%LOGFILE%" 2>&1
+
+call :LOG Capturing baseline memory usage before modifications...
+call :CaptureMemorySnapshot "BEFORE SYSTEM AND USER OPTIMIZATIONS"
 
 ::call the restorepoint creation and registry export helper to ensure you can roll back the changes if needed.
 call :PrepareRollbackProtection
@@ -883,9 +997,8 @@ if not defined MemoryKB (
     call :LOG WARNING: Unable to determine installed RAM. SvcHostSplitThresholdInKB was not changed.
 ) else (
     call :LOG Installed RAM: !MemoryKB! KB
-
-    reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d !MemoryKB! /f >>"%LOGFILE%" 2>&1
-
+	set /a "SvcHostThresholdKB=MemoryKB+262144"
+	reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d !SvcHostThresholdKB! /f >>"%LOGFILE%" 2>&1
     if errorlevel 1 (
         call :LOG ERROR: Failed to configure SvcHostSplitThresholdInKB.
     ) else (
@@ -1190,6 +1303,7 @@ call :SetServiceStartup TimeBroker demand
 ::protectedCOREservice call :SetServiceStartup TimeBrokerSvc demand
 ::omitforENTERPRISE call :SetServiceStartup TokenBroker demand
 call :SetServiceStartup TroubleshootingSvc demand
+call :SetServiceStartup tzautoupdate demand
 call :SetServiceStartup UI0Detect demand
 ::ignored call :SetServiceStartup UdkUserSvc_* demand
 call :SetServiceStartup UmRdpService demand
@@ -1235,9 +1349,12 @@ call :SetServiceStartup WpcMonSvc demand
 ::omitforENTERPRISE call :SetServiceStartup WpnService demand
 call :SetServiceStartup workfolderssvc demand
 ::deprecated call :SetServiceStartup  WSService demand
+call :SetServiceStartup wuauserv demand
 call :SetServiceStartup XblAuthManager demand
 call :SetServiceStartup XblGameSave demand
+call :SetServiceStartup XboxGipSvc demand
 call :SetServiceStartup XboxNetApiSvc demand
+
 ECHO.
 call :LOG Done with manual services
 ECHO.
@@ -1246,7 +1363,6 @@ call :LOG This is just in case you used a previous utility that set the services
 call :SetServiceStartup AudioEndpointBuilder auto
 call :SetServiceStartup AudioSrv auto
 ::protectedCOREservice call :SetServiceStartup BFE auto
-call :SetServiceStartup BITS auto
 ::protectedCOREservice call :SetServiceStartup BrokerInfrastructure auto
 call :SetServiceStartup BthHFSrv auto
 ::ignored call :SetServiceStartup CDPUserSvc_* auto
@@ -1285,10 +1401,8 @@ call :SetServiceStartup Spooler auto
 call :SetServiceStartup Themes auto
 call :SetServiceStartup tiledatamodelsvc auto
 call :SetServiceStartup TrkWks auto
-call :SetServiceStartup tzautoupdate auto
 call :SetServiceStartup uhssvc auto
 call :SetServiceStartup UserManager auto
-call :SetServiceStartup W32Time auto
 call :SetServiceStartup Wcmsvc auto
 ::ignore due to possible conflict with third-party antivitus call :SetServiceStartup WinDefend auto
 call :SetServiceStartup Winmgmt auto
@@ -1296,14 +1410,14 @@ call :SetServiceStartup WlanSvc auto
 ::ignored call :SetServiceStartup WpnUserService_* auto
 ECHO.
 
-Call :LOG Changing less essential services to delayed-auto
+Call :LOG "Changing less essential services to delayed-auto"
+call :SetServiceStartup BITS delayed-auto
 ::omit call :SetServiceStartup MapsBroker delayed-auto
 ::protectedCOREservice call :SetServiceStartup SecurityHealthService delayed-auto
+call :SetServiceStartup W32Time delayed-auto
 call :SetServiceStartup WSearch delayed-auto
 ::protectedCOREservice call :SetServiceStartup wscsvc delayed-auto
-call :SetServiceStartup wuauserv delayed-auto
 call :SetServiceStartup wudfsvc delayed-auto
-call :SetServiceStartup XboxGipSvc delayed-auto
 ECHO.
 
 call :ApplyServiceStartupPlan
@@ -1812,6 +1926,7 @@ if errorlevel 1 (
 call :LOG **********************************************************
 call :LOG        Enabling User-level Registry Improvements        
 call :LOG **********************************************************
+call :PrepareRollbackProtection
 goto UserRegistryDeployment
 :: ===============================================================
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
@@ -1825,7 +1940,6 @@ goto UserRegistryDeployment
 :: if errorlevel 1 call :Log ERROR setting ValueName for %BASE%
 
 ::call the restorepoint creation and registry export helper to ensure you can roll back the changes if needed.
-call :PrepareRollbackProtection
 
 :ApplySettings
 
@@ -2046,18 +2160,6 @@ if errorlevel 1 call :LOG ERROR: Failed to set ...
 REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager" /v EnthusiastMode /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 
-call :LOG Preferrence- Disable the TaskView button in the taskbar - same as "Win tab" -clutter
-REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowTaskViewButton /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
-
-call :LOG Disable the people button in the taskbar
-REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" /v PeopleBand /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
- 
-call :LOG Enable right-click menu to auto end tasks from taskbar 
-REG ADD "%BASE%\Control Panel\Desktop" /v AutoEndTasks /t REG_SZ /d 1 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
-
 call :LOG disable windows feeds for users
 ::WindowsPro, Enterprise, LTSC
 REG ADD "%BASE%\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" /v EnableFeeds /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
@@ -2071,13 +2173,6 @@ if not "!ShellFeedsRC!"=="0" (
 ) else (
     call :LOG ShellFeedsTaskbarViewMode configured for %BASE%.
 )
-call :LOG Hide the meet now button on the taskbar
-REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v HideSCAMeetNow /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
-
-call :LOG Set the searchbox taskbar to icon only for less wasted space
-REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
 
 call :LOG Disabling start menu ads method 2
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
@@ -2087,11 +2182,31 @@ call :LOG Disabling tailored experiences with telemetry
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 
+call :LOG Preferrence- Disable the TaskView button in the taskbar - same as "Win tab" -clutter
+REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowTaskViewButton /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
+if errorlevel 1 call :LOG ERROR: Failed to set ...
+
+call :LOG Disable the people button in the taskbar
+REG ADD "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" /v PeopleBand /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
+if errorlevel 1 call :LOG ERROR: Failed to set ...
+ 
+call :LOG Enable right-click menu to auto end tasks from taskbar 
+REG ADD "%BASE%\Control Panel\Desktop" /v AutoEndTasks /t REG_SZ /d 1 /f >>"%LOGFILE%" 2>&1
+if errorlevel 1 call :LOG ERROR: Failed to set ...
+
+call :LOG Hide the meet now button on the taskbar
+REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v HideSCAMeetNow /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
+if errorlevel 1 call :LOG ERROR: Failed to set ...
+
+call :LOG Set the searchbox taskbar to icon only for less wasted space
+REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Search" /v SearchboxTaskbarMode /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
+if errorlevel 1 call :LOG ERROR: Failed to set ...
+
 call :LOG Disabling Cross-Device Resume -optional but reverse this if you sync your phone to your pc - honestly your web browser should do this - mostly web
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v IsResumeAllowed /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 
-call :LOG Disable MS Co-pilot per user registry settings
+call :LOG Disable MS Co-pilot per user registry settings -standard version - not m365 copilot
 REG ADD "%BASE%\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 REG ADD "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowCopilotButton /t REG_DWORD /d 0 /f >>"%LOGFILE%" 2>&1
@@ -2293,7 +2408,7 @@ goto REBOOT
 
 :GamingTweaks
 call :LOG **********************************************************
-call :LOG        Begin Gaming Tweaks Registry Improvements        
+call :LOG        Begin Gaming Improvements        
 call :LOG **********************************************************
 call :LOG 
 
@@ -2319,7 +2434,7 @@ call :LOG Increasing system responsiveness for Games
 REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v SystemResponsiveness /t REG_DWORD /d 0x0000000a /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 
-call :LOG Setting GPU priority for Windowed Apps and Games based on Microsoft Learn Docs
+call :LOG Setting priority for Windowed Apps and Games based on Microsoft Learn Docs
 ::Games Multimedia Class Scheduler Service - GPU priority SFIO priority and Affinity are all listed as not yet used
 ::Scheduling priority High treats Task Priority setting as 2 instead of respecting number 1 low - 8 high
 ::REG ADD "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f >>"%LOGFILE%" 2>&1
@@ -2415,6 +2530,18 @@ goto REBOOT
 	:unknownchassisgaming
 		call :LOG Unable to determine chassis type. Skipped power tweaks.
 	goto REBOOT
+
+:BeardSweeper
+call :LOG BeardSweeper is Currently In development - will be released soon
+goto :menu
+
+:WinGet
+call :LOG Installing or Updating to latest version of the WinGet Package manager
+powershell.exe -c Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+PowerShell.exe -c Install-Module -Name Microsoft.WinGet.Client -Force
+call :LOG Searching for and updating existing installed packages
+winget update --all --include-unknown --accept-source-agreements --accept-package-agreements --silent --verbose
+goto :menu
 
 :REBOOT
 call :LOG ****************************ALL FINISHED!******************************
