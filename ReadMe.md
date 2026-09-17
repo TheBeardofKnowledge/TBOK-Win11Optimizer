@@ -119,7 +119,8 @@ So what does it do?
    5. Set improved MMCS values for Windowed Games and Audio Apps
    6. Desktop - Disable Power Throttling and Lazy Mode
    7. Desktop - Enable Ultimate Performance Power Plan
-   NORE TO COME, but they need testing.
+   
+   MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
 
 
 
