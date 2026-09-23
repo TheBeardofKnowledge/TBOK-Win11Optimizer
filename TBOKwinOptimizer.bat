@@ -1298,7 +1298,7 @@ call :SetServiceStartup smphost demand
 call :SetServiceStartup SNMPTrap demand
 call :SetServiceStartup spectrum demand
 call :SetServiceStartup SstpSvc demand
-call :SetServiceStartup SSDPSRV demand
+::call :SetServiceStartup SSDPSRV demand
 call :SetServiceStartup StiSvc demand
 call :SetServiceStartup StorSvc demand
 call :SetServiceStartup svsvc demand
@@ -1314,7 +1314,7 @@ call :SetServiceStartup TroubleshootingSvc demand
 call :SetServiceStartup tzautoupdate demand
 call :SetServiceStartup UI0Detect demand
 ::ignored call :SetServiceStartup UdkUserSvc_* demand
-call :SetServiceStartup UmRdpService demand
+::call :SetServiceStartup UmRdpService demand
 ::ignored call :SetServiceStartup UnistoreSvc_* demand
 ::ignored call :SetServiceStartup UserDataSvc_* demand
 ::omitforENTERPRISE call :SetServiceStartup UsoSvc demand
@@ -1324,7 +1324,7 @@ call :SetServiceStartup vds demand
 call :SetServiceStartup vmicguestinterface demand
 call :SetServiceStartup vmicheartbeat demand
 call :SetServiceStartup vmickvpexchange demand
-call :SetServiceStartup vmicrdv demand
+::call :SetServiceStartup vmicrdv demand
 call :SetServiceStartup vmicshutdown demand
 call :SetServiceStartup vmictimesync demand
 call :SetServiceStartup vmicvmsession demand
