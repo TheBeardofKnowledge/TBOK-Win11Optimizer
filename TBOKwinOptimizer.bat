@@ -1289,7 +1289,7 @@ call :SetServiceStartup SEMgrSvc demand
 call :SetServiceStartup SensorDataService demand
 call :SetServiceStartup SensorService demand
 call :SetServiceStartup SensrSvc demand
-call :SetServiceStartup SessionEnv demand
+::omitforENTERPRISE RDP call :SetServiceStartup SessionEnv demand
 call :SetServiceStartup SharedAccess demand
 call :SetServiceStartup SharedRealitySvc demand
 call :SetServiceStartup shpamsvc demand
@@ -1314,7 +1314,7 @@ call :SetServiceStartup TroubleshootingSvc demand
 call :SetServiceStartup tzautoupdate demand
 call :SetServiceStartup UI0Detect demand
 ::ignored call :SetServiceStartup UdkUserSvc_* demand
-::call :SetServiceStartup UmRdpService demand
+::omitforENTERPRISE RDP call :SetServiceStartup UmRdpService demand
 ::ignored call :SetServiceStartup UnistoreSvc_* demand
 ::ignored call :SetServiceStartup UserDataSvc_* demand
 ::omitforENTERPRISE call :SetServiceStartup UsoSvc demand
@@ -1324,7 +1324,7 @@ call :SetServiceStartup vds demand
 call :SetServiceStartup vmicguestinterface demand
 call :SetServiceStartup vmicheartbeat demand
 call :SetServiceStartup vmickvpexchange demand
-::call :SetServiceStartup vmicrdv demand
+::omitforENTERPRISE RDP call :SetServiceStartup vmicrdv demand
 call :SetServiceStartup vmicshutdown demand
 call :SetServiceStartup vmictimesync demand
 call :SetServiceStartup vmicvmsession demand
@@ -1345,7 +1345,7 @@ call :SetServiceStartup WerSvc demand
 call :SetServiceStartup WFDSConMgrSvc demand
 call :SetServiceStartup WiaRpc demand
 ::protectedCOREservice call :SetServiceStartup WinHttpAutoProxySvc demand
-call :SetServiceStartup WinRM demand
+::omitforENTERPRISE call :SetServiceStartup WinRM demand
 call :SetServiceStartup wisvc demand
 call :SetServiceStartup wlidsvc demand
 call :SetServiceStartup wlpasvc demand
