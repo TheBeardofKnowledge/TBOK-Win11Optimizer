@@ -254,7 +254,7 @@ if ($Config.ApplyServiceStartupTweaks) {
         'UnistoreSvc', 'UserDataSvc', 'upnphost', 'VacSvc', 'vds', 'vmicguestinterface', 'vmicheartbeat',
         'vmickvpexchange', 'vmicshutdown', 'vmictimesync', 'vmicvmsession', 'vmicvss', 'VSS', 'WalletService',
         'wbengine', 'WcsPlugInService', 'wcncsvc', 'WdNisSvc', 'WdiServiceHost', 'WdiSystemHost', 'WebClient', 'Wecsvc',
-        'wercplsupport', 'WEPHOSTSVC', 'WerSvc', 'WFDSConMgrSvc', 'WiaRpc', 'WinHttpAutoProxySvc', 'WinRM', 'wisvc',
+        'wercplsupport', 'WEPHOSTSVC', 'WerSvc', 'WFDSConMgrSvc', 'WiaRpc', 'WinHttpAutoProxySvc', 'wisvc',
         'wlidsvc', 'wlpasvc', 'wmiApSrv', 'WMPNetworkSvc', 'WManSvc', 'WPDBusEnum', 'WpcMonSvc', 'workfolderssvc',
         'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc'
     )
