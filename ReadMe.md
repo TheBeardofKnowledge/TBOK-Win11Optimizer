@@ -104,14 +104,17 @@ So what does it do?
    15. Hide the "meet now" button in the taskbar (related to #13 above)
    16. Set the taskbar search box for icon only for less wasted space (works the same)
    17. Disable Cross-device resume (optional, but skip this if you use "your phone"
-   18. Disable MS Copilot (standard, not M365 co-pilot)
-   19. Disable Microsoft Office logging
-   20. Disable Microsoft Office Client Telemetry and verbose logging
-   21. Disable Microsoft Office "Customer Experience Program"
-   22. Disable Microsoft Office Feedback
-   23. Disable MS Sticky keys hotkey because leaving something on shift is as bad as caps lock
+   18. Disable MS Sticky keys hotkey because leaving something on shift is as bad as caps lock
 
-8. Gaming Improvements
+8. Debloat and removal of wasteful scheduled tasks
+   1. Disable MS Copilot (standard, not M365 co-pilot)
+   2. Disable Microsoft Office logging
+   3. Disable Microsoft Office Client Telemetry and verbose logging
+   4. Disable Microsoft Office "Customer Experience Program"
+   5. Disable Microsoft Office Feedback
+    
+
+9. Gaming Improvements
    1. Reset High Precision Event Timer preconfigured so Windows will redetect on next boot
    2. Enable Hardware Accelerated GPU scheduling (will only work if your hardware supports HAGS)
    3. Enable Optimizations for Windowed Games
@@ -119,6 +122,9 @@ So what does it do?
    5. Set improved MMCS values for Windowed Games and Audio Apps
    6. Desktop - Disable Power Throttling and Lazy Mode
    7. Desktop - Enable Ultimate Performance Power Plan
+
+10. WinGet automatic software updater
+11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts.
    
    MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
 
