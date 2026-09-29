@@ -14,7 +14,6 @@
 :: If you have an issue or want to request a feature, please request it on GitHub
 :: If you want to learn more about each command, use what I use learn.microsoft.com
 :: READY... Lets go
-:: 
 
 ::turn off echoing all commands
 @ECHO OFF
@@ -30,8 +29,9 @@ if /i "%~1"=="--postboot-memory" goto :PostBootMemoryEntry
 ::Script release version and release date 
 :ScriptVersion
 set "VERSION=1.6.4"
-set "VERDATE=09-25-2026"
+set "VERDATE=09-29-2026"
 
+:Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
 echo No changes are being made at this time.
 
@@ -41,19 +41,29 @@ if not errorlevel 1 goto :GotPrivileges
 echo Requesting administrative elevation...
 set "ELEVATE_SCRIPT=%~f0"
 set "ELEVATE_WORKDIR=%~dp0"
+set "ELEVATE_ARGUMENTS=%*"
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "try { $arguments = '/d /c \"\"' + $env:ELEVATE_SCRIPT + '\"\"'; Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $arguments -ErrorAction Stop; exit 0 } catch { exit 1 }"
+    "try {" ^
+    "    $batchCommand = '""' + $env:ELEVATE_SCRIPT + '""';" ^
+    "    if (-not [string]:: {" ^
+    "        $batchCommand += ' ' + $env:ELEVATE_ARGUMENTS;" ^
+    "    };" ^
+    "    Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList @('/d','/c',$batchCommand) -ErrorAction Stop;" ^
+    "    exit 0;" ^
+    "} catch {" ^
+    "    exit 1;" ^
+    "}"
 
 set "ELEVATE_RC=%ERRORLEVEL%"
 set "ELEVATE_SCRIPT="
 set "ELEVATE_WORKDIR="
+set "ELEVATE_ARGUMENTS="
 
 if not "%ELEVATE_RC%"=="0" (
     echo Elevation was canceled or failed.
-	echo This script requires elevation in order to check for and adjust system settings and registry
-	echo Please retry... the script will now exit
-    pause
+    echo This script requires an elevated administrative session.
+    echo When using PowerShell remoting, start the session with sufficient administrative rights.
     exit /b 1
 )
 
@@ -120,6 +130,34 @@ set "TBOK_TASK_PLAN=%TEMP%\TBOK-TaskPlan-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
 if exist "%TBOK_TASK_PLAN%" (
     del /q "%TBOK_TASK_PLAN%" >nul 2>&1
 )
+
+:: Command-line routing for PowerShell, remote, and unattended execution
+:switches
+if /I "%~1"=="/SYSTEM" (
+    set "TBOK_NONINTERACTIVE=1"
+    goto :SYSTEMTWEAKS
+)
+
+if /I "%~1"=="/CLEANUP" (
+    set "TBOK_NONINTERACTIVE=1"
+    goto :BeardSweeper
+)
+
+if /I "%~1"=="/GAMING" (
+    set "TBOK_NONINTERACTIVE=1"
+    goto :GamingTweaks
+)
+
+if /I "%~1"=="/WINGET" (
+    set "TBOK_NONINTERACTIVE=1"
+    goto :WinGet
+)
+
+if /I "%~1"=="/EXIT" (
+    set "TBOK_NONINTERACTIVE=1"
+    goto :EXIT
+)
+
 goto :MENU
 
 :PrepareRollbackProtection
@@ -1015,30 +1053,29 @@ if not defined RegType (
 
 if not defined RegDescription set "RegDescription=!RegName!"
 
-for /f "tokens=1,2,*" %%A in ('reg.exe query "!RegPath*" /v "!RegName!" 2^>nul ^| findstr*/I /C:"!RegName!"') do (
-    set "*urrentType=%%B"
-    set "CurrentDa*a=%%C"
+for /f "tokens=1,2,*" %%A in ('reg.exe query "!RegPath!" /v "!RegName!" 2^>nul ^| findstr /I /C:"!RegName!"') do (
+    set "CurrentType=%%B"
+    set "CurrentData=%%C"
 )
 
-if defined CurrentType (*    if /I "!CurrentType!"=="!RegTy*e!" (
-        if /I "!RegType!"=="*EG_DWORD" (
-            set "Curre*tNumber="
+if defined CurrentType (
+    if /I "!CurrentType!"=="!RegType!" (
+        if /I "!RegType!"=="REG_DWORD" (
+            set "CurrentNumber="
             set "RequestedNumber="
 
-            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!CurrentData!'; if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
+            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!CurrentData!';if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
                 set "CurrentNumber=%%N"
             )
 
-            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!RegData!'; if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
+            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!RegData!';if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
                 set "RequestedNumber=%%N"
             )
 
-            if defined CurrentNumber if defined RequestedNumber (
-                if "!CurrentNumber!"=="!RequestedNumber!" (
-                    endlocal
-                    call :LOG MATCH: %~5 already equals %~4 [%~3]. No changes were made.
-                    exit /b 0
-                )
+            if defined CurrentNumber if defined RequestedNumber if "!CurrentNumber!"=="!RequestedNumber!" (
+                endlocal
+                call :LOG MATCH: %~5 already equals %~4 [%~3]. No changes were made.
+                exit /b 0
             )
         ) else (
             if /I "!CurrentData!"=="!RegData!" (
@@ -1074,6 +1111,7 @@ if "!ChangeMode!"=="CREATE" (
 
 endlocal & call :LOG CHANGE: %~5 original value: %OriginalData% [%OriginalType%]; changed to: %~4 [%~3].
 exit /b 0
+)
 
 ::::::::::::::::::::::::::::: SECTION END Helpers for Control Sets mapping::::::::::::::::::::::::::::
 
@@ -1289,13 +1327,27 @@ echo(%LogMessage%
 endlocal
 exit /b 0
 
+:Delay
+::helper for adding a delay compatible with powershell enter-pssession
+setlocal DisableDelayedExpansion
+set "DelaySeconds=%~1"
+if not defined DelaySeconds (
+    endlocal
+    exit /b 2
+)
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds %DelaySeconds%" >nul 2>&1
+set "DelayRC=%ERRORLEVEL%"
+endlocal & exit /b %DelayRC%
+
 ::::::::::::end script helper objects::::::::::
 
 :MENU
 TITLE TBOK Windows Performance Optimizer Version %version% %verdate%
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
-ECHO                  THE BEARD OF KNOWLEDGE
+ECHO Script now supports arguments for non-interactive sessions
+ECHO "run with /system /cleanup /gaming /winget for a menuless run"
 ECHO ============================================================
+ECHO                  THE BEARD OF KNOWLEDGE
 ECHO.
 ECHO        ::::::::::: :::::::::   ::::::::  :::    ::: 
 ECHO           :+:     :+:    :+: :+:    :+: :+:   :+:   
@@ -1320,12 +1372,23 @@ ECHO IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THI
 ECHO "https://buymeacoffee.com/thebeardofl"
 ECHO.
 ECHO ============================================================
-CHOICE /c 12345 /n /m "Enter 1-5: (Default: 1 in 10 seconds): " /t 10 /d 1
-if errorlevel 5 goto :EXIT
-if errorlevel 4 goto :WinGet
-if errorlevel 3 goto :GamingTweaks
-if errorlevel 2 goto :BeardSweeper
-if errorlevel 1 goto :SystemTweaks
+choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 15 seconds): " /t 15 /d 1 2>>"%LOGFILE%"
+set "MenuChoiceRC=%ERRORLEVEL%"
+
+if "%MenuChoiceRC%"=="255" (
+    call :LOG NOTICE: Interactive console input is unavailable.
+    call :LOG NOTICE: Defaulting to menu option 1 - System and user improvements.
+    goto :SYSTEMTWEAKS
+)
+
+if "%MenuChoiceRC%"=="5" goto :EXIT
+if "%MenuChoiceRC%"=="4" goto :WinGet
+if "%MenuChoiceRC%"=="3" goto :GamingTweaks
+if "%MenuChoiceRC%"=="2" goto :BeardSweeper
+if "%MenuChoiceRC%"=="1" goto :SYSTEMTWEAKS
+
+call :LOG ERROR: Unexpected menu return code: %MenuChoiceRC%.
+goto :EXIT
 
 :SYSTEMTWEAKS
 ECHO Creating Log file and adding system information
@@ -1632,6 +1695,8 @@ if "!PageFileRC!"=="0" (
 ECHO.
 
 :SERVICES
+
+:svcHostThresholdStart
 call :LOG Enable Modern SvHost split process grouping behaviour according to currently installed RAM
 call :LOG This changes the svhost process grouping to an optimized state based on installed RAM
 call :LOG Works up to around 4TB of RAM - after that theres no noticeable improvement
@@ -1654,8 +1719,9 @@ if not defined SvcHostThresholdKB (
 )
 call :SetAllControlSetValues "Control" "SvcHostSplitThresholdInKB" "REG_DWORD" "!SvcHostThresholdKB!" "SvcHostSplitThresholdInKB"
 
-:SvcHostThresholdComplete
+:svcHostThresholdComplete
 
+:windowsservices
 ECHO.
 ECHO.
 call :LOG Setting Windows Services to Optimized State
@@ -1775,7 +1841,7 @@ for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"RESULT=" "%DriveDetectFile%
 if /i not "!DriveType!"=="HDD" if /i not "!DriveType!"=="SSD" (
     set "DriveType=UNKNOWN"
 )
-:DriveDetectionCleanup
+:drivedetectioncleanup
 if defined DriveDetectFile (
     if exist "%DriveDetectFile%" (
         del /q "%DriveDetectFile%" >nul 2>&1
@@ -2181,7 +2247,7 @@ call :LOG Disable Powershell telemetry
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis" "REG_DWORD" "1" "DisableAIDataAnalysis"
 
 
-:EdgeTweaks
+:edgeTweaks
 call :LOG Disabling MS Edge Automatic Background Startup
 call :LOG Disable Edge so-called start boost - Edge runs on startup even if you dont use it
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Edge" "StartupBoostEnabled" "REG_DWORD" "0" "StartupBoostEnabled"
@@ -2383,7 +2449,7 @@ if errorlevel 1 call :LOG WARNING: Failed to disable OfficeTelemetryAgentFallBac
 call :DisableTask "\Microsoft\Office\" "OfficeTelemetryAgentLogOn2016"
 if errorlevel 1 call :LOG WARNING: Failed to disable OfficeTelemetryAgentLogOn2016.
 
-:WindowsTasks
+:windowsTasks
 call :LOG Disabling wasteful windows tasks
 ::customer experience improvement program tasks that run even if not joined in the program
 call :DisableTask "\Microsoft\Windows\Application Experience\" "Microsoft Compatibility Appraiser"
@@ -3122,11 +3188,13 @@ powershell.exe -c Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 
 PowerShell.exe -c Install-Module -Name Microsoft.WinGet.Client -Force
 call :LOG Searching for and updating existing installed packages
 winget update --all --include-unknown --accept-source-agreements --accept-package-agreements --silent --verbose
-goto :menu
+if defined TBOK_NONINTERACTIVE goto :EXIT
+goto :MENU
 
 :BeardSweeper
 call :LOG BeardSweeper integration is Currently In development - will be released soon, but you can get it on github in "scripts from my videos"
-goto :menu
+if defined TBOK_NONINTERACTIVE goto :EXIT
+goto :MENU
 
 :REBOOT
 call :LOG ****************************ALL FINISHED!******************************
@@ -3136,9 +3204,26 @@ call :LOG .         "https://buymeacoffee.com/thebeardofl"
 call :LOG .
 call :LOG ****************************ALL FINISHED!******************************
 
-choice /c YN /n /m "Restart now? [Y/N]: Default N in 10 seconds and exit " /t 10 /d N
-if errorlevel 2 goto EXIT
-if errorlevel 1 goto RESTART
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Noninteractive execution detected. The computer will not restart automatically.
+    call :LOG Restart the computer manually when appropriate.
+    goto :EXIT
+)
+
+choice.exe /c YN /n /m "Restart now? [Y/N]: Default N in 10 seconds and exit " /t 10 /d N 2>>"%LOGFILE%"
+set "RestartChoiceRC=%ERRORLEVEL%"
+
+if "%RestartChoiceRC%"=="255" (
+    call :LOG NOTICE: Interactive console input is unavailable.
+    call :LOG The computer will not restart automatically.
+    goto :EXIT
+)
+
+if "%RestartChoiceRC%"=="2" goto :EXIT
+if "%RestartChoiceRC%"=="1" goto :RESTART
+
+call :LOG WARNING: Unexpected restart prompt return code: %RestartChoiceRC%.
+goto :EXIT
 
 :RESTART
 call :SchedulePostRebootMemorySnapshot
@@ -3179,5 +3264,7 @@ if defined TBOK_TASK_PLAN (
     )
 )
 endlocal
-timeout /t 10 /nobreak >nul
+call :Delay 10
 exit /b 0
+
+
