@@ -352,19 +352,16 @@ if defined TBOK_PROFILE_BACKUP_DIR (
 ) else (
     call :LOG CRITICAL: HKLM and HKCU registry exports were skipped because the fallback backup directory is unavailable.
 )
-
 if "!HKLMBackupRC!"=="0" (
     call :LOG HKLM registry export completed successfully.
 ) else (
     call :LOG ERROR: HKLM registry export failed with exit code !HKLMBackupRC!.
 )
-
 if "!HKCUBackupRC!"=="0" (
     call :LOG HKCU registry export completed successfully.
 ) else (
     call :LOG ERROR: HKCU registry export failed with exit code !HKCUBackupRC!.
 )
-
 if not "!HKLMBackupRC!!HKCUBackupRC!!LoadedHiveBackupRC!"=="000" (
     call :LOG CRITICAL: Restore-point creation failed and one or more registry exports also failed.
     call :LOG CRITICAL: A complete rollback-protection method could not be created.
@@ -378,6 +375,31 @@ exit /b 1
 ::0 = Restore point created successfully
 ::1 = Restore point failed, but both fallback exports succeeded
 ::2 = Restore point failed and fallback protection is incomplete
+
+:RequireRollbackProtection
+::helper to retain rollback return codes instead of verifying each time
+setlocal DisableDelayedExpansion
+
+set "ProtectedOperation=%~1"
+if not defined ProtectedOperation set "ProtectedOperation=Requested optimization"
+
+call :PrepareRollbackProtection
+set "RollbackRC=%ERRORLEVEL%"
+
+if "%RollbackRC%"=="0" (
+    endlocal
+    exit /b 0
+)
+if "%RollbackRC%"=="1" (
+    endlocal
+    call :LOG NOTICE: The restore point failed, but fallback registry exports were created.
+    exit /b 0
+)
+
+endlocal
+call :LOG CRITICAL: Complete rollback protection could not be created.
+call :LOG CRITICAL: %~1 will not be applied.
+exit /b 1
 
 :: Restore the original SystemRestorePointCreationFrequency value.
 :RestorePointFrequency
@@ -809,6 +831,34 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 set "AppxRC=%ERRORLEVEL%"
 endlocal & exit /b %AppxRC%
 
+:ProcessInstalledAppxPattern
+setlocal DisableDelayedExpansion
+
+set "AppxPattern=%~1"
+set "AppxLabel=%~2"
+
+call :RemoveAppxPattern "%AppxPattern%" "%AppxLabel%"
+set "AppxResult=%ERRORLEVEL%"
+
+if "%AppxResult%"=="0" (
+    endlocal
+    exit /b 0
+)
+if "%AppxResult%"=="2" (
+    endlocal
+    call :LOG NOTICE: All-user enumeration was unavailable; current-account inspection completed for %~2.
+    exit /b 0
+)
+if "%AppxResult%"=="3" (
+    endlocal
+    call :LOG ERROR: RemoveAppxPattern was called incorrectly for %~2.
+    exit /b 3
+)
+
+endlocal
+call :LOG WARNING: Installed package processing failed for %~2.
+exit /b 1
+
 :RemoveProvisionedAppxPattern
 setlocal DisableDelayedExpansion
 set "TBOK_PROVISIONED_PATTERN=%~1"
@@ -852,6 +902,21 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 
 set "ProvisionedAppxRC=%ERRORLEVEL%"
 endlocal & exit /b %ProvisionedAppxRC%
+
+:ProcessProvisionedAppxPattern
+setlocal DisableDelayedExpansion
+
+call :RemoveProvisionedAppxPattern "%~1" "%~2"
+set "ProvisionedResult=%ERRORLEVEL%"
+
+if not "%ProvisionedResult%"=="0" (
+    endlocal
+    call :LOG WARNING: One or more provisioned %~2 packages could not be removed.
+    exit /b 1
+)
+endlocal
+exit /b 0
+
 
 ::::::::::::::::::::::::::::: SECTION START Begin Helpers for Control Sets mapping::::::::::::::::::::::::::::
 :::::::This is used to match working -current, default, and lastknowngood sets to values persist
@@ -1159,10 +1224,9 @@ if errorlevel 1 (
 )
 exit /b 0
 
-::Post Script-run and reboot results capture to log file
+::Post Script-run and reboot results capture to log file if user chooses to reboot immediately
 :: Create a one-time scheduled task that captures memory usage into the existing log file for verification
 :: five minutes after the next system startup.
-:: Schedule one memory snapshot five minutes after the next startup.
 :SchedulePostRebootMemorySnapshot
 setlocal DisableDelayedExpansion
 
@@ -1327,6 +1391,19 @@ echo(%LogMessage%
 endlocal
 exit /b 0
 
+:CleanupTemporaryPlans
+if defined TBOK_SERVICE_PLAN (
+    if exist "%TBOK_SERVICE_PLAN%" (
+        del /q "%TBOK_SERVICE_PLAN%" >nul 2>&1
+    )
+)
+if defined TBOK_TASK_PLAN (
+    if exist "%TBOK_TASK_PLAN%" (
+        del /q "%TBOK_TASK_PLAN%" >nul 2>&1
+    )
+)
+exit /b 0
+
 :Delay
 ::helper for adding a delay compatible with powershell enter-pssession
 setlocal DisableDelayedExpansion
@@ -1426,14 +1503,8 @@ if not "!StartupAuditRC!"=="0" (
     call :LOG WARNING: The startup-item audit could not be completed.
 )
 
-call :PrepareRollbackProtection
-set "RollbackProtectionRC=!ERRORLEVEL!"
-
-if "!RollbackProtectionRC!"=="1" (
-    call :LOG NOTICE: The restore point failed, but fallback registry exports were created.
-) else if "!RollbackProtectionRC!"=="2" (
-    call :LOG CRITICAL: Complete rollback protection could not be created.
-    call :LOG No system or user optimization changes will be applied.
+call :RequireRollbackProtection "System and user optimization changes"
+if errorlevel 1 (
     goto :EXIT
 )
 
@@ -2318,28 +2389,17 @@ call :LOG **********************************************************
 call :LOG               Time for some bloat removal                
 call :LOG **********************************************************
 ECHO.
-call :LOG Remove and Disable Windows Co-pilot -standard version -NOT M365 copilot- machine wide
+call :LOG Remove and Disable Windows CoPilot -standard version NOT M365 CoPilot- machine wide
 ::Enable reg key that allows app to be disabled or uninstalled systemwide
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot" "REG_DWORD" "1" "TurnOffWindowsCopilot"
 
 call :LOG Removing existing Microsoft Co-Pilot installed package
-call :RemoveAppxPattern "*Microsoft.Copilot*" "Microsoft Copilot"
-set "AppxRC=!ERRORLEVEL!"
+call :ProcessInstalledAppxPattern "*Microsoft.Copilot*" "Microsoft Copilot"
 
-if "!AppxRC!"=="1" (
-    call :LOG WARNING: Installed Microsoft Copilot removal failed.
-) else if "!AppxRC!"=="2" (
-	call :LOG NOTICE: Current-account fallback processing completed for Microsoft Copilot because all-user enumeration was unavailable.
-) else if "!AppxRC!"=="3" (
-    call :LOG ERROR: RemoveAppxPattern was called incorrectly for Microsoft Copilot.
-)
-call :LOG Removing provisioned Microsoft Copilot packages...
-call :RemoveProvisionedAppxPattern "*Microsoft.Copilot*" "Microsoft Copilot"
-if errorlevel 1 (
-    call :LOG WARNING: One or more provisioned Microsoft Copilot packages could not be removed.
-)
+call :LOG Removing provisioned Microsoft Co-Pilot installed package
+call :ProcessProvisionedAppxPattern "*Microsoft.Copilot*" "Microsoft Copilot"
 
-call :LOG Configuring registry keys to prevent reinstallation through future updates. NOT M365 Copilot.
+call :LOG Configuring registry keys to prevent reinstallation through future updates. Does not affect M365 CoPilot
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot" "IsCopilotAvailable" "REG_DWORD" "0" "IsCopilotAvailable"
 
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot" "CopilotDisabledReason" "REG_SZ" "IsEnabledForGeographicRegionFailed" "IsEnabledForGeographicRegionFailed"
@@ -2351,22 +2411,10 @@ call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Shell\Copilot\BingChat" 
 
 call :LOG Removing Bing Search
 call :LOG Removing installed Microsoft Bing Search packages...
-call :RemoveAppxPattern "*Microsoft.BingSearch*" "Microsoft Bing Search"
-set "AppxRC=!ERRORLEVEL!"
-
-if "!AppxRC!"=="1" (
-    call :LOG WARNING: One or more installed Microsoft Bing Search packages could not be removed.
-) else if "!AppxRC!"=="2" (
-    call :LOG NOTICE: Current-account fallback processing completed for Microsoft Bing Search because all-user enumeration was unavailable.
-) else if "!AppxRC!"=="3" (
-    call :LOG ERROR: RemoveAppxPattern was called incorrectly for Microsoft Bing Search.
-)
+call :ProcessInstalledAppxPattern "*Microsoft.BingSearch*" "Microsoft Bing Search"
 
 call :LOG Removing provisioned Microsoft Bing Search packages...
-call :RemoveProvisionedAppxPattern "*Microsoft.BingSearch*" "Microsoft Bing Search"
-if errorlevel 1 (
-    call :LOG WARNING: One or more provisioned Microsoft Bing Search packages could not be removed.
-)
+call :ProcessProvisionedAppxPattern "*Microsoft.BingSearch*" "Microsoft Bing Search"
 
 call :LOG Removing Taskbar Widgets that should have died with Vista because now they run an entire chromium browser process
 call :LOG Stopping running Windows Widgets processes...
@@ -2390,39 +2438,16 @@ if errorlevel 1 (
     call :LOG WARNING: One or more Widgets processes could not be stopped.
 )
 call :LOG Removing installed Microsoft Widgets Platform Runtime packages...
-call :RemoveAppxPattern "Microsoft.WidgetsPlatformRuntime" "Microsoft Widgets Platform Runtime"
-set "AppxRC=!ERRORLEVEL!"
-
-if "!AppxRC!"=="1" (
-    call :LOG WARNING: Installed Microsoft Widgets Platform Runtime removal failed.
-) else if "!AppxRC!"=="2" (
- call :LOG NOTICE: Current-account fallback processing completed for Microsoft Widgets Platform Runtime because all-user enumeration was unavailable.
-) else if "!AppxRC!"=="3" (
-    call :LOG ERROR: RemoveAppxPattern was called incorrectly for Microsoft Widgets Platform Runtime.
-)
+call :ProcessInstalledAppxPattern "Microsoft.WidgetsPlatformRuntime" "Microsoft Widgets Platform Runtime"
 
 call :LOG Removing provisioned Microsoft Widgets Platform Runtime packages...
-call :RemoveProvisionedAppxPattern "*Microsoft.WidgetsPlatformRuntime*" "Microsoft Widgets Platform Runtime"
-if errorlevel 1 (
-    call :LOG WARNING: One or more provisioned Microsoft Widgets Platform Runtime packages could not be removed.
-)
+call :ProcessProvisionedAppxPattern "*Microsoft.WidgetsPlatformRuntime*" "Microsoft Widgets Platform Runtime"
 
-call :LOG Removing provisioned Microsoft WebExperience packages...
-call :RemoveAppxPattern "MicrosoftWindows.Client.WebExperience" "Windows Web Experience"
-set "AppxRC=!ERRORLEVEL!"
+call :LOG Removing installed Microsoft WebExperience packages...
+call :ProcessInstalledAppxPattern "MicrosoftWindows.Client.WebExperience" "Windows Web Experience"
 
-if "!AppxRC!"=="1" (
-    call :LOG WARNING: Installed Windows Web Experience removal failed.
-) else if "!AppxRC!"=="2" (
-	call :LOG NOTICE: Current-account fallback processing completed for Windows Web Experience because all-user enumeration was unavailable.
-) else if "!AppxRC!"=="3" (
-    call :LOG ERROR: RemoveAppxPattern was called incorrectly for Windows Web Experience.
-)
 call :LOG Removing provisioned Windows Web Experience packages...
-call :RemoveProvisionedAppxPattern "*MicrosoftWindows.Client.WebExperience*" "Windows Web Experience"
-if errorlevel 1 (
-    call :LOG WARNING: One or more provisioned Windows Web Experience packages could not be removed.
-)
+call :ProcessProvisionedAppxPattern "*MicrosoftWindows.Client.WebExperience*" "Windows Web Experience"
 
 :DeleteScheduledTasks
 call :LOG **********************************************************
@@ -2994,14 +3019,8 @@ call :LOG        Begin Gaming Improvements
 call :LOG **********************************************************
 call :LOG 
 
-call :PrepareRollbackProtection
-set "RollbackProtectionRC=!ERRORLEVEL!"
-
-if "!RollbackProtectionRC!"=="1" (
-    call :LOG NOTICE: The restore point failed, but fallback registry exports were created.
-) else if "!RollbackProtectionRC!"=="2" (
-    call :LOG CRITICAL: Complete rollback protection could not be created.
-    call :LOG Gaming changes will not be applied.
+call :RequireRollbackProtection "Gaming optimization changes"
+if errorlevel 1 (
     goto :EXIT
 )
 
@@ -3235,34 +3254,16 @@ if not "!PostBootSnapshotRC!"=="0" (
 )
 
 call :LOG Restarting PC.
+call :CleanupTemporaryPlans
 
-if defined TBOK_SERVICE_PLAN (
-    if exist "%TBOK_SERVICE_PLAN%" (
-        del /q "%TBOK_SERVICE_PLAN%" >nul 2>&1
-    )
-)
-if defined TBOK_TASK_PLAN (
-    if exist "%TBOK_TASK_PLAN%" (
-        del /q "%TBOK_TASK_PLAN%" >nul 2>&1
-    )
-)
 endlocal
 shutdown.exe /r /t 0
 exit /b 0
 
 :EXIT
 call :LOG Script exiting.
+call :CleanupTemporaryPlans
 
-if defined TBOK_SERVICE_PLAN (
-    if exist "%TBOK_SERVICE_PLAN%" (
-        del /q "%TBOK_SERVICE_PLAN%" >nul 2>&1
-    )
-)
-if defined TBOK_TASK_PLAN (
-    if exist "%TBOK_TASK_PLAN%" (
-        del /q "%TBOK_TASK_PLAN%" >nul 2>&1
-    )
-)
 endlocal
 call :Delay 10
 exit /b 0
