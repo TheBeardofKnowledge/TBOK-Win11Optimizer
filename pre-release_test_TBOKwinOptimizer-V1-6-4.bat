@@ -28,8 +28,8 @@ if /i "%~1"=="--postboot-memory" goto :PostBootMemoryEntry
 
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.6.4"
-set "VERDATE=09-29-2026"
+set "VERSION=1.6.5"
+set "VERDATE=09-30-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
@@ -39,23 +39,28 @@ echo No changes are being made at this time.
 if not errorlevel 1 goto :GotPrivileges
 
 echo Requesting administrative elevation...
+
 set "ELEVATE_SCRIPT=%~f0"
 set "ELEVATE_WORKDIR=%~dp0"
 set "ELEVATE_ARGUMENTS=%*"
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "try {" ^
-    "    $batchCommand = '""' + $env:ELEVATE_SCRIPT + '""';" ^
-    "    if (-not [string]:: {" ^
+    "    $quote = [char]34;" ^
+    "    $batchCommand = $quote + $env:ELEVATE_SCRIPT + $quote;" ^
+    "    if ($env:ELEVATE_ARGUMENTS) {" ^
     "        $batchCommand += ' ' + $env:ELEVATE_ARGUMENTS;" ^
     "    };" ^
-    "    Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList @('/d','/c',$batchCommand) -ErrorAction Stop;" ^
+    "    $cmdArguments = '/d /c ' + $quote + $batchCommand + $quote;" ^
+    "    Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $cmdArguments -ErrorAction Stop;" ^
     "    exit 0;" ^
     "} catch {" ^
+    "    Write-Error ('Elevation launch failed: ' + $_.Exception.Message);" ^
     "    exit 1;" ^
     "}"
 
 set "ELEVATE_RC=%ERRORLEVEL%"
+
 set "ELEVATE_SCRIPT="
 set "ELEVATE_WORKDIR="
 set "ELEVATE_ARGUMENTS="
@@ -117,6 +122,9 @@ set "LOGFILE=%~dp0TBOKwinOptimizer-%COMPUTERNAME%-!TBOK_TIMESTAMP!.log"
 :: Fallback registry backups are created only if restore-point creation fails.
 set "TBOK_RESTORE_POINT_FAILED=0"
 set "TBOK_PROFILE_BACKUP_DIR="
+
+:: Assume all-user Appx enumeration is available until Windows returns a failure.
+set "TBOK_APPX_ALLUSERS_AVAILABLE=1"
 
 :: Initialize the consolidated service startup queue.
 set "TBOK_SERVICE_PLAN=%TEMP%\TBOK-ServicePlan-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
@@ -278,6 +286,21 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "    Write-Output ('WARNING: SystemRestoreConfig query failed: ' + $_.Exception.Message);" ^
     "    $diagnosticFailure = $true;" ^
     "};" ^
+    "Write-Output 'Restore-related service status:';" ^
+    "foreach ($serviceName in @('Schedule','EventSystem','COMSysApp')) {" ^
+    "    try {" ^
+    "        $service = Get-CimInstance -ClassName Win32_Service -Filter ('Name=''' + $serviceName + '''') -ErrorAction Stop;" ^
+    "        if ($null -eq $service) {" ^
+    "            Write-Output ('WARNING: Restore-related service was not found: ' + $serviceName);" ^
+    "            $diagnosticFailure = $true;" ^
+    "        } else {" ^
+    "            Write-Output ($serviceName + ': DisplayName=' + $service.DisplayName + '; State=' + $service.State + '; StartMode=' + $service.StartMode + '; ExitCode=' + $service.ExitCode);" ^
+    "        };" ^
+    "    } catch {" ^
+    "        Write-Output ('WARNING: Could not query restore-related service ' + $serviceName + ': ' + $_.Exception.Message);" ^
+    "        $diagnosticFailure = $true;" ^
+    "    };" ^
+    "};" ^
     "Write-Output 'Existing restore points:';" ^
     "try {" ^
     "    $restorePoints = @(Get-ComputerRestorePoint -ErrorAction Stop | Select-Object -First 5 SequenceNumber,Description,CreationTime);" ^
@@ -316,47 +339,67 @@ if not "!RestoreDiagRC!"=="0" (
     call :LOG Restore-point diagnostics completed successfully.
 )
 call :LOG Creating HKLM and HKCU registry exports as a fallback...
-
+:: Export every currently loaded user hive for fallback protection.
 set "HKLMBackupRC=1"
 set "HKCUBackupRC=1"
 set "LoadedHiveBackupRC=1"
+set "LoadedHiveAttempted=0"
+set "LoadedHiveSucceeded=0"
+set "LoadedHiveFailed=0"
 
 if defined TBOK_PROFILE_BACKUP_DIR (
     REG export HKLM ^
-        "!TBOK_PROFILE_BACKUP_DIR!\HKLM-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
+        "!TBOK_PROFILE_BACKUP_DIR!\HKLM-Before-TBOK.reg" ^
+        /y >>"%LOGFILE%" 2>&1
 
     set "HKLMBackupRC=!ERRORLEVEL!"
 
     REG export HKCU ^
-        "!TBOK_PROFILE_BACKUP_DIR!\HKCU-ExecutionAccount-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
+        "!TBOK_PROFILE_BACKUP_DIR!\HKCU-ExecutionAccount-Before-TBOK.reg" ^
+        /y >>"%LOGFILE%" 2>&1
 
     set "HKCUBackupRC=!ERRORLEVEL!"
-	::per user loaded hive backup protection
     set "LoadedHiveBackupRC=0"
 
     for /f "delims=" %%U in ('REG query HKEY_USERS ^| findstr /R /I /C:"^HKEY_USERS\\S-1-5-21-" /C:"^HKEY_USERS\\S-1-12-1-" ^| findstr /V /I "_Classes"') do (
-    set "LoadedHiveName=%%U"
-    set "LoadedHiveFile=!LoadedHiveName:HKEY_USERS\=!"
-    set "LoadedHiveFile=!LoadedHiveFile:\=-!"
+        set /a "LoadedHiveAttempted+=1"
 
-    REG export "%%U" ^
-        "!TBOK_PROFILE_BACKUP_DIR!\HKU-!LoadedHiveFile!-Before-TBOK.reg" /y >>"%LOGFILE%" 2>&1
+        set "LoadedHiveName=%%U"
+        set "LoadedHiveFile=!LoadedHiveName:HKEY_USERS\=!"
+        set "LoadedHiveFile=!LoadedHiveFile:\=-!"
 
-    if errorlevel 1 (
-        set "LoadedHiveBackupRC=1"
-        call :LOG ERROR: Failed to export loaded user hive %%U.
-    ) else (
-        call :LOG Exported loaded user hive %%U.
+        REG export "%%U" ^
+            "!TBOK_PROFILE_BACKUP_DIR!\HKU-!LoadedHiveFile!-Before-TBOK.reg" ^
+            /y >>"%LOGFILE%" 2>&1
+
+        if errorlevel 1 (
+            set /a "LoadedHiveFailed+=1"
+            set "LoadedHiveBackupRC=1"
+            call :LOG ERROR: Failed to export loaded user hive %%U.
+        ) else (
+            set /a "LoadedHiveSucceeded+=1"
+            call :LOG Exported loaded user hive %%U.
+        )
     )
-)	
 ) else (
-    call :LOG CRITICAL: HKLM and HKCU registry exports were skipped because the fallback backup directory is unavailable.
+    call :LOG CRITICAL: HKLM, HKCU, and loaded-user registry exports were skipped because the fallback backup directory is unavailable.
 )
+
+if "!LoadedHiveAttempted!"=="0" (
+    call :LOG NOTICE: No loaded user SID hives were found for fallback export.
+) else (
+    call :LOG Loaded user hive export summary:
+    call :LOG Hives attempted: !LoadedHiveAttempted!
+    call :LOG Hives exported successfully: !LoadedHiveSucceeded!
+    call :LOG Hives failed: !LoadedHiveFailed!
+)
+
 if "!HKLMBackupRC!"=="0" (
     call :LOG HKLM registry export completed successfully.
 ) else (
     call :LOG ERROR: HKLM registry export failed with exit code !HKLMBackupRC!.
 )
+
 if "!HKCUBackupRC!"=="0" (
     call :LOG HKCU registry export completed successfully.
 ) else (
@@ -368,7 +411,8 @@ if not "!HKLMBackupRC!!HKCUBackupRC!!LoadedHiveBackupRC!"=="000" (
     exit /b 2
 )
 
-call :LOG Registry fallback exports completed successfully.
+call :LOG Machine and currently loaded user registry fallback exports completed successfully.
+call :LOG Offline and Default profile hive backups will be created during per-user processing.
 exit /b 1
 
 ::referrence return code results list
@@ -378,27 +422,27 @@ exit /b 1
 
 :RequireRollbackProtection
 ::helper to retain rollback return codes instead of verifying each time
-setlocal DisableDelayedExpansion
-
+:: Preserve delayed expansion and rollback variables used by PrepareRollbackProtection.
 set "ProtectedOperation=%~1"
-if not defined ProtectedOperation set "ProtectedOperation=Requested optimization"
+
+if not defined ProtectedOperation (
+    set "ProtectedOperation=Requested optimization"
+)
 
 call :PrepareRollbackProtection
-set "RollbackRC=%ERRORLEVEL%"
+set "RollbackRC=!ERRORLEVEL!"
 
-if "%RollbackRC%"=="0" (
-    endlocal
+if "!RollbackRC!"=="0" (
     exit /b 0
 )
-if "%RollbackRC%"=="1" (
-    endlocal
+
+if "!RollbackRC!"=="1" (
     call :LOG NOTICE: The restore point failed, but fallback registry exports were created.
     exit /b 0
 )
 
-endlocal
 call :LOG CRITICAL: Complete rollback protection could not be created.
-call :LOG CRITICAL: %~1 will not be applied.
+call :LOG CRITICAL: !ProtectedOperation! will not be applied.
 exit /b 1
 
 :: Restore the original SystemRestorePointCreationFrequency value.
@@ -776,29 +820,24 @@ if not defined TBOK_APPX_LABEL (
 )
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$pattern = $env:TBOK_APPX_PATTERN;" ^
+        "$pattern = $env:TBOK_APPX_PATTERN;" ^
     "$label = $env:TBOK_APPX_LABEL;" ^
-    "$allUsersAvailable = $true;" ^
-    "try {" ^
-    "    $packages = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop);" ^
-    "} catch {" ^
-    "    $allUsersAvailable = $false;" ^
-    "    Write-Output ('WARNING: All-user package enumeration failed for ' + $label + ': ' + $_.Exception.Message);" ^
+    "$allUsersAvailable = $env:TBOK_APPX_ALLUSERS_AVAILABLE -ne '0';" ^
+    "$packages = @();" ^
+    "if ($allUsersAvailable) {" ^
+    "    try {" ^
+    "        $packages = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop);" ^
+    "    } catch {" ^
+    "        $allUsersAvailable = $false;" ^
+    "        Write-Output ('WARNING: All-user package enumeration failed for ' + $label + ': ' + $_.Exception.Message);" ^
+    "    };" ^
+    "};" ^
+    "if (-not $allUsersAvailable) {" ^
     "    try {" ^
     "        $packages = @(Get-AppxPackage -Name $pattern -ErrorAction Stop);" ^
     "    } catch {" ^
-    "        Write-Output ('ERROR: Current-account package enumeration also failed: ' + $_.Exception.Message);" ^
+    "        Write-Output ('ERROR: Current-account package enumeration failed for ' + $label + ': ' + $_.Exception.Message);" ^
     "        exit 1;" ^
-    "    };" ^
-    "};" ^
-    "if ($packages.Count -eq 0) {" ^
-    "    if ($allUsersAvailable) {" ^
-    "        Write-Output ('SKIPPED: No installed ' + $label + ' packages were found for any user.');" ^
-    "        exit 0;" ^
-    "    } else {" ^
-    "        Write-Output ('SKIPPED: No installed ' + $label + ' package was found for the current execution account.');" ^
-    "        Write-Output 'NOTICE: Other users could not be enumerated.';" ^
-    "        exit 2;" ^
     "    };" ^
     "};" ^
     "$successCount = 0;" ^
@@ -846,7 +885,15 @@ if "%AppxResult%"=="0" (
 )
 if "%AppxResult%"=="2" (
     endlocal
-    call :LOG NOTICE: All-user enumeration was unavailable; current-account inspection completed for %~2.
+
+    if not "%TBOK_APPX_ALLUSERS_AVAILABLE%"=="0" (
+        set "TBOK_APPX_ALLUSERS_AVAILABLE=0"
+        call :LOG NOTICE: All-user enumeration was unavailable; current-account inspection completed for %~2.
+        call :LOG NOTICE: Remaining installed-package checks will skip all-user enumeration during this run.
+    ) else (
+        call :LOG NOTICE: Current-account inspection completed for %~2 because all-user enumeration is unavailable.
+    )
+
     exit /b 0
 )
 if "%AppxResult%"=="3" (
@@ -1126,28 +1173,20 @@ for /f "tokens=1,2,*" %%A in ('reg.exe query "!RegPath!" /v "!RegName!" 2^>nul ^
 if defined CurrentType (
     if /I "!CurrentType!"=="!RegType!" (
         if /I "!RegType!"=="REG_DWORD" (
-            set "CurrentNumber="
-            set "RequestedNumber="
+            set "CurrentNumber=__INVALID_CURRENT__"
+            set "RequestedNumber=__INVALID_REQUESTED__"
+            set /a "CurrentNumber=!CurrentData!" >nul 2>&1
+            set /a "RequestedNumber=!RegData!" >nul 2>&1
 
-            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!CurrentData!';if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
-                set "CurrentNumber=%%N"
-            )
-
-            for /f "delims=" %%N in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$v='!RegData!';if($v -match '^0x'){[Convert]::Parse($v)}" 2^>nul') do (
-                set "RequestedNumber=%%N"
-            )
-
-            if defined CurrentNumber if defined RequestedNumber if "!CurrentNumber!"=="!RequestedNumber!" (
+            if "!CurrentNumber!"=="!RequestedNumber!" (
                 endlocal
                 call :LOG MATCH: %~5 already equals %~4 [%~3]. No changes were made.
                 exit /b 0
             )
-        ) else (
-            if /I "!CurrentData!"=="!RegData!" (
-                endlocal
-                call :LOG MATCH: %~5 already equals "%~4" [%~3]. No changes were made.
-                exit /b 0
-            )
+        ) else if /I "!CurrentData!"=="!RegData!" (
+            endlocal
+            call :LOG MATCH: %~5 already equals "%~4" [%~3]. No changes were made.
+            exit /b 0
         )
     )
 
@@ -1160,7 +1199,7 @@ if defined CurrentType (
     set "ChangeMode=CREATE"
 )
 
-reg.exe add "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
+REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
 
 if errorlevel 1 (
     endlocal
@@ -1176,7 +1215,6 @@ if "!ChangeMode!"=="CREATE" (
 
 endlocal & call :LOG CHANGE: %~5 original value: %OriginalData% [%OriginalType%]; changed to: %~4 [%~3].
 exit /b 0
-)
 
 ::::::::::::::::::::::::::::: SECTION END Helpers for Control Sets mapping::::::::::::::::::::::::::::
 
@@ -2547,7 +2585,6 @@ goto UserRegistryDeployment
 
 call :LOG ========= Apply Tweaks to User Registry Hives and Default ==============
 
-call :LOG DEBUG ApplySettings called. Arg1=[%~1]
 set "BASE=%~1"
 if not defined BASE (
     call :LOG ERROR ApplySettings called with no registry hive
@@ -2915,7 +2952,8 @@ for /d %%D in ("%SystemDrive%\Users\*") do (
 
                         if errorlevel 1 (
                             call :LOG NOTICE: A file-copy backup of NTUSER.DAT for %%D was not created.
-                            call :LOG NOTICE: This is expected when the profile hive is loaded or the file is locked.
+                            call :LOG NOTICE: The hive may be loaded, locked, redirected, or otherwise unavailable to COPY.
+                            call :LOG NOTICE: A registry-native backup will be attempted if the hive can be mounted.
                         ) else (
                             call :LOG Backed up NTUSER.DAT for %%D.
                         )
@@ -2928,6 +2966,7 @@ for /d %%D in ("%SystemDrive%\Users\*") do (
             call :LOG Loading hive for %%D
 
             REG query "HKU\TempHive" >nul 2>&1
+
             if not errorlevel 1 (
                 call :LOG WARNING: Found a previously mounted TempHive. Attempting cleanup.
                 REG unload "HKU\TempHive" >>"%LOGFILE%" 2>&1
@@ -2939,16 +2978,42 @@ for /d %%D in ("%SystemDrive%\Users\*") do (
                 )
             )
 
-            REG load "HKU\TempHive" "%%D\NTUSER.DAT" >nul 2>&1
+            REG load "HKU\TempHive" "%%D\NTUSER.DAT" >>"%LOGFILE%" 2>&1
+            set "ProfileLoadRC=!ERRORLEVEL!"
 
-            if errorlevel 1 (
+            if not "!ProfileLoadRC!"=="0" (
                 call :LOG Skipping offline load for %%D. The profile hive may already be loaded or currently in use.
             ) else (
-                call :ApplySettings "HKU\TempHive"
-                REG unload "HKU\TempHive" >nul 2>&1
+                if "!TBOK_RESTORE_POINT_FAILED!"=="1" (
+                    if defined TBOK_PROFILE_BACKUP_DIR (
+                        if exist "!TBOK_PROFILE_BACKUP_DIR!" (
+                            REG save "HKU\TempHive" ^
+                                "!TBOK_PROFILE_BACKUP_DIR!\%%~nxD-NTUSER-SavedHive.dat" ^
+                                /y >>"%LOGFILE%" 2>&1
 
-                if errorlevel 1 (
+                            if errorlevel 1 (
+                                call :LOG WARNING: Could not create a registry-native hive backup for %%D.
+                            ) else (
+                                call :LOG Created registry-native hive backup for %%D.
+                            )
+                        ) else (
+                            call :LOG WARNING: The profile backup directory is unavailable for %%D.
+                        )
+                    ) else (
+                        call :LOG WARNING: The profile backup directory is undefined for %%D.
+                    )
+                )
+
+                call :ApplySettings "HKU\TempHive"
+                set "ProfileSettingsRC=!ERRORLEVEL!"
+
+                REG unload "HKU\TempHive" >>"%LOGFILE%" 2>&1
+                set "ProfileUnloadRC=!ERRORLEVEL!"
+
+                if not "!ProfileUnloadRC!"=="0" (
                     call :LOG ERROR: Failed to unload temporary hive for %%D.
+                ) else if not "!ProfileSettingsRC!"=="0" (
+                    call :LOG WARNING: The hive for %%D was unloaded, but one or more profile settings may have failed.
                 ) else (
                     call :LOG Successfully processed unloaded profile %%D.
                 )
@@ -2965,37 +3030,71 @@ for /d %%D in ("%SystemDrive%\Users\*") do (
 call :LOG Processing Default profile...
 
 if exist "%SystemDrive%\Users\Default\NTUSER.DAT" (
-if "!TBOK_RESTORE_POINT_FAILED!"=="1" (
-    if defined TBOK_PROFILE_BACKUP_DIR (
-        if exist "!TBOK_PROFILE_BACKUP_DIR!" (
-            copy /y "%SystemDrive%\Users\Default\NTUSER.DAT" ^
-                "!TBOK_PROFILE_BACKUP_DIR!\Default-NTUSER.DAT" >>"%LOGFILE%" 2>&1
+    if "!TBOK_RESTORE_POINT_FAILED!"=="1" (
+        if defined TBOK_PROFILE_BACKUP_DIR (
+            if exist "!TBOK_PROFILE_BACKUP_DIR!" (
+                copy /y "%SystemDrive%\Users\Default\NTUSER.DAT" ^
+                    "!TBOK_PROFILE_BACKUP_DIR!\Default-NTUSER.DAT" >>"%LOGFILE%" 2>&1
 
-            if errorlevel 1 (
-                call :LOG WARNING: Could not back up the Default profile NTUSER.DAT.
+                if errorlevel 1 (
+                    call :LOG NOTICE: A file-copy backup of the Default profile NTUSER.DAT was not created.
+                    call :LOG NOTICE: A registry-native backup will be attempted after the hive is mounted.
+                ) else (
+                    call :LOG Backed up the Default profile NTUSER.DAT.
+                )
             ) else (
-                call :LOG Backed up the Default profile NTUSER.DAT.
+                call :LOG WARNING: The profile backup directory is unavailable for the Default profile.
             )
+        ) else (
+            call :LOG WARNING: The profile backup directory is undefined for the Default profile.
         )
     )
-)
-    REG query HKU\DefaultHive >nul 2>&1
+
+    REG query "HKU\DefaultHive" >nul 2>&1
 
     if not errorlevel 1 (
         call :LOG WARNING: DefaultHive is already mounted. Attempting cleanup.
-        REG unload HKU\DefaultHive >>"%LOGFILE%" 2>&1
-    )
-
-    REG load HKU\DefaultHive "%SystemDrive%\Users\Default\NTUSER.DAT" >>"%LOGFILE%" 2>&1
-
-    if errorlevel 1 (
-        call :LOG ERROR: Failed to load Default profile.
-    ) else (
-        call :ApplySettings "HKU\DefaultHive"
-        REG unload HKU\DefaultHive >>"%LOGFILE%" 2>&1
+        REG unload "HKU\DefaultHive" >>"%LOGFILE%" 2>&1
 
         if errorlevel 1 (
-            call :LOG ERROR: Failed to unload Default profile.
+            call :LOG ERROR: Could not unload the previously mounted DefaultHive.
+        ) else (
+            call :LOG Previous DefaultHive mount was unloaded successfully.
+        )
+    )
+
+    REG load "HKU\DefaultHive" "%SystemDrive%\Users\Default\NTUSER.DAT" >>"%LOGFILE%" 2>&1
+    set "DefaultHiveLoadRC=!ERRORLEVEL!"
+
+    if not "!DefaultHiveLoadRC!"=="0" (
+        call :LOG ERROR: Failed to load the Default profile. Exit code: !DefaultHiveLoadRC!.
+    ) else (
+        if "!TBOK_RESTORE_POINT_FAILED!"=="1" (
+            if defined TBOK_PROFILE_BACKUP_DIR (
+                if exist "!TBOK_PROFILE_BACKUP_DIR!" (
+                    REG save "HKU\DefaultHive" ^
+                        "!TBOK_PROFILE_BACKUP_DIR!\Default-NTUSER-SavedHive.dat" ^
+                        /y >>"%LOGFILE%" 2>&1
+
+                    if errorlevel 1 (
+                        call :LOG WARNING: Could not create a registry-native backup of the Default profile.
+                    ) else (
+                        call :LOG Created a registry-native backup of the Default profile.
+                    )
+                )
+            )
+        )
+
+        call :ApplySettings "HKU\DefaultHive"
+        set "DefaultSettingsRC=!ERRORLEVEL!"
+
+        REG unload "HKU\DefaultHive" >>"%LOGFILE%" 2>&1
+        set "DefaultHiveUnloadRC=!ERRORLEVEL!"
+
+        if not "!DefaultHiveUnloadRC!"=="0" (
+            call :LOG ERROR: Failed to unload the Default profile. Exit code: !DefaultHiveUnloadRC!.
+        ) else if not "!DefaultSettingsRC!"=="0" (
+            call :LOG WARNING: The Default profile hive was unloaded, but one or more settings may have failed.
         ) else (
             call :LOG Default profile updated successfully.
         )
