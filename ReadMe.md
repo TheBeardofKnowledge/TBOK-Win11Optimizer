@@ -1,10 +1,13 @@
 IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
 https://buymeacoffee.com/thebeardofl
 
-Yes... It's here, it works, and best of all; it's all based on and verified by Microsoft documentation at learn.microsoft.com
+Yes... It's here, it works, and best of all; it's majority based on and verified by Microsoft documentation at learn.microsoft.com
 
-An easy to use, business approved, 1-click Windows 10-11 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
+Literally the safest and most comprehensive optimization & debloat tool out there (that I know of).
+
+An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
 ... and it's already getting improvements thanks to your testing and feedback.
+Yes, this also works on windows 10, yes this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored.
 
 Call this a "Make Windows perform the way it should" script, but I'll likely change it to something more catchy.
 
@@ -13,15 +16,16 @@ What took 1 second in Windows 10 now takes 4 seconds in windows 11.  Multiply th
 
 WE DON'T HAVE TIME FOR THAT!
 
-It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times.  But there's hope, the Dev's left us a way to change it.
+It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times.  But there's hope... the Dev's left us a way to change it.
 
 While I love debloat tools like the CTT WinUtil and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, AND for each user... that's extremely inefficient and time consuming... 
+
 FACT IS, there are soo many beneficial settings to change in Windows that don't have any negative effects and the resulting "experience" is vastly improved.
 
 So let's fix that and make it soo easy and safe that it removes any hurdles.
 
 What's different from this than all the others out there: we address the problem settings across all users of a PC, and also apply the settings to the default profile windows uses for any new accounts that are added, which ensures new profiles get the benefits.
-Plus we ONLY change settings that DON'T affect Windows features or security negatively. Literally the safest and most comprehensive optimization & debloat tool out there.
+Plus we ONLY change settings that DON'T affect Windows features or security negatively. 
 
 You see, most debloat tools only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.
 
@@ -115,7 +119,7 @@ So what does it do?
    5. Disable Microsoft Office Feedback
     
 
-9. Gaming Improvements
+9. Gaming Improvements (improved 1% lows, reduce lag, improve frame timing)
    1. Reset High Precision Event Timer preconfigured so Windows will redetect on next boot
    2. Enable Hardware Accelerated GPU scheduling (will only work if your hardware supports HAGS)
    3. Enable Optimizations for Windowed Games
