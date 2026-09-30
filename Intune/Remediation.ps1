@@ -7,16 +7,31 @@ Pas de section retrait Copilot : l'org utilise Copilot 365 (M365 Copilot dans le
 Office), independant du Copilot consumer integre a l'OS - rien a nettoyer ici.
 Intune : configurer "Run this script using the logged-on credentials" = No (execution SYSTEM),
 "Enforce script signature check" selon ta politique, 64-bit PowerShell = Yes.
+
+1.3.0 :
+- Invoke-Safely passe en ErrorAction Stop et verifie $LASTEXITCODE : une erreur non
+  terminante (cle absente) ou un exe natif en echec etait journalise "OK".
+- Set-RegValue cree la cle manquante (AdvertisingInfo, WindowsAI, TaskbarDeveloperSettings).
+- Ruches : filtre SID ancre (les "<SID>_Classes" etaient traitees comme des profils),
+  profils EPM S-1-5-110-* et profils deja charges exclus.
+- Services : relecture de l'etat courant, rien n'est ecrit si deja conforme ; les services
+  proteges (Access denied) sont journalises SKIPPED, pas FAILED. AppIDSvc retire de la
+  liste Manual (service AppLocker).
+- Pagefile : ecrit directement PagingFiles (Session Manager\Memory Management) puis relu ;
+  Win32_PageFileSetting.Put() renvoie "Valeur hors de la plage" sur Win11. Seuil 32 Go
+  calcule sur la RAM installee (TotalPhysicalMemory exclut la memoire reservee :
+  32213 Mo sur une machine de 32 Go).
+- Plus aucun True/False dans la sortie standard.
 #>
 
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.3.0'
 $MarkerPath    = 'HKLM:\SOFTWARE\TBOK-Optimizer'
 $LogDir        = "$env:ProgramData\TBOK-Optimizer"
 $LogFile       = Join-Path $LogDir 'remediation.log'
 
 $Config = @{
     CreateRestorePoint        = $true
-    ApplyPerformanceTweaks    = $true    # pagefile, network throttling, IRPStackSize, SvcHostSplit, shutdown timeout, long paths
+    ApplyPerformanceTweaks    = $true    # pagefile, network throttling, SvcHostSplit, shutdown timeout, long paths
     ApplyServiceStartupTweaks = $true    # listes demand/auto/delayed-auto ci-dessous
     ConfigureHibernation      = $true    # desktop -> off, laptop -> on, chassis indetermine -> on ne touche a rien
     DisableSshAgentService    = $false   # laisse a false si des postes dev sont dans le groupe cible
@@ -44,21 +59,56 @@ $Config.Telemetry = @{
 
 New-Item -Path $LogDir -ItemType Directory -Force | Out-Null
 
+$script:FailureCount = 0
+
 function Write-Log {
     param([string]$Message)
     $line = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
-    Add-Content -Path $LogFile -Value $line
+    Add-Content -LiteralPath $LogFile -Value $line
 }
 
+# ErrorAction Stop : sans lui, une erreur non terminante (New-ItemProperty sur cle absente)
+# n'atteint pas le catch et l'action est journalisee OK. Les exe natifs (powercfg, reg,
+# bcdedit) ne levent rien : on controle $LASTEXITCODE. -PassThru pour recuperer le resultat
+# sans polluer la sortie standard remontee a Intune.
 function Invoke-Safely {
-    param([string]$Description, [scriptblock]$Action)
+    param([string]$Description, [scriptblock]$Action, [switch]$PassThru)
+    $ok = $false
     try {
-        & $Action
+        $ErrorActionPreference = 'Stop'
+        $global:LASTEXITCODE = 0
+        & $Action | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "native command exited $LASTEXITCODE" }
         Write-Log "OK: $Description"
-        return $true
+        $ok = $true
     } catch {
         Write-Log "FAILED: $Description -- $($_.Exception.Message)"
-        return $false
+        $script:FailureCount++
+    }
+    if ($PassThru) { return $ok }
+}
+
+# New-ItemProperty ne cree pas la cle parente : AdvertisingInfo, WindowsAI,
+# TaskbarDeveloperSettings n'existent pas sur un poste neuf.
+function Set-RegValue {
+    param([string]$Path, [string]$Name, [string]$Type, $Value)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
+    }
+    New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType $Type -Value $Value -Force -ErrorAction Stop | Out-Null
+}
+
+# Etat relu dans le registre : Get-Service en PS 5.1 ne distingue pas Automatic et
+# DelayedAutomatic.
+function Get-ServiceStartupType {
+    param([string]$Name)
+    $key = Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$Name" -ErrorAction SilentlyContinue
+    if (-not $key) { return $null }
+    switch ([int]$key.Start) {
+        2 { if ($key.DelayedAutostart -eq 1) { 'DelayedAutomatic' } else { 'Automatic' } }
+        3 { 'Manual' }
+        4 { 'Disabled' }
+        default { "Start=$($key.Start)" }
     }
 }
 
@@ -71,16 +121,36 @@ function Set-ServiceStartupSafely {
     $services = Get-Service -Name $Name -ErrorAction SilentlyContinue
     if (-not $services) { return }
     foreach ($svc in $services) {
+        $current = Get-ServiceStartupType -Name $svc.Name
+        if ($current -eq $StartupType) { continue }
         try {
             if ($StartupType -eq 'DelayedAutomatic') {
                 $null = sc.exe config $svc.Name start= delayed-auto
+                if ($LASTEXITCODE -eq 5) { throw [System.UnauthorizedAccessException]'Access denied' }
                 if ($LASTEXITCODE -ne 0) { throw "sc.exe exited $LASTEXITCODE" }
             } else {
                 Set-Service -Name $svc.Name -StartupType $StartupType -ErrorAction Stop
+                # Set-Service -StartupType Automatic ne retire pas DelayedAutostart.
+                if ($StartupType -eq 'Automatic' -and (Get-ServiceStartupType -Name $svc.Name) -eq 'DelayedAutomatic') {
+                    $null = sc.exe config $svc.Name start= auto
+                }
             }
-            Write-Log "OK: service $($svc.Name) -> $StartupType"
+            $after = Get-ServiceStartupType -Name $svc.Name
+            if ($after -ne $StartupType) { throw "read back $after" }
+            Write-Log "OK: service $($svc.Name) $current -> $StartupType"
         } catch {
-            Write-Log "FAILED: service $($svc.Name) -> $StartupType -- $($_.Exception.Message)"
+            $msg = $_.Exception.Message
+            # -and et -or ont la meme priorite en PowerShell : parentheses obligatoires.
+            $inner  = $_.Exception.InnerException
+            $denied = ($_.Exception -is [System.UnauthorizedAccessException]) -or
+                      (($inner -is [System.ComponentModel.Win32Exception]) -and ($inner.NativeErrorCode -eq 5)) -or
+                      ($msg -match 'Access denied|Acc.s refus')
+            if ($denied) {
+                Write-Log "SKIPPED: service $($svc.Name) $current -> $StartupType -- protected service (access denied)"
+            } else {
+                Write-Log "FAILED: service $($svc.Name) $current -> $StartupType -- $msg"
+                $script:FailureCount++
+            }
         }
     }
 }
@@ -91,21 +161,21 @@ Write-Log "=== Remediation started (v$ScriptVersion) ==="
 # --- Point de restauration (avec repli backup registre si echec) ---
 if ($Config.CreateRestorePoint) {
     Invoke-Safely "Enable System Restore on system drive" {
-        Enable-ComputerRestore -Drive $env:SystemDrive -ErrorAction Stop
+        Enable-ComputerRestore -Drive $env:SystemDrive
     }
     Invoke-Safely "Ensure VSS service is running" {
-        if ((Get-Service -Name VSS).Status -ne 'Running') { Start-Service VSS -ErrorAction Stop }
+        if ((Get-Service -Name VSS).Status -ne 'Running') { Start-Service VSS }
     }
     Invoke-Safely "Allow immediate restore point creation" {
-        New-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore' `
-            -Name SystemRestorePointCreationFrequency -PropertyType DWord -Value 0 -Force -ErrorAction Stop | Out-Null
+        Set-RegValue 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore' SystemRestorePointCreationFrequency DWord 0
     }
-    $rpOk = Invoke-Safely "Create restore point 'Before Intune Optimizer Remediation'" {
-        Checkpoint-Computer -Description 'Before Intune Optimizer Remediation' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+    $rpOk = Invoke-Safely -PassThru "Create restore point 'Before Intune Optimizer Remediation'" {
+        Checkpoint-Computer -Description 'Before Intune Optimizer Remediation' -RestorePointType MODIFY_SETTINGS
     }
     if (-not $rpOk) {
         Invoke-Safely "Fallback: export HKLM/HKCU registry backup" {
             reg export HKLM (Join-Path $LogDir 'HKLM-backup.reg') /y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "reg export HKLM exited $LASTEXITCODE" }
             reg export HKCU (Join-Path $LogDir 'HKCU-backup.reg') /y | Out-Null
         }
     }
@@ -129,81 +199,48 @@ if ($Config.ConfigureHibernation) {
 if ($Config.ApplyPerformanceTweaks) {
 
     Invoke-Safely "Disable network throttling" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' `
-            -Name NetworkThrottlingIndex -PropertyType DWord -Value 0xffffffff -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' NetworkThrottlingIndex DWord 0xffffffff
     }
     Invoke-Safely "Set SystemResponsiveness to 10" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' `
-            -Name SystemResponsiveness -PropertyType DWord -Value 10 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' SystemResponsiveness DWord 10
     }
     Invoke-Safely "Speed up service shutdown timeout" {
-        New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
-            -Name WaitToKillServiceTimeout -PropertyType String -Value '5000' -Force | Out-Null
+        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' WaitToKillServiceTimeout String '5000'
     }
     Invoke-Safely "Enable long path support" {
-        New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
-            -Name LongPathsEnabled -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled DWord 1
     }
+
+    $installedKB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB
     Invoke-Safely "Set SvcHost split threshold to installed RAM" {
-        $memKB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB
-        New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' `
-            -Name SvcHostSplitThresholdInKB -PropertyType DWord -Value ([uint32]$memKB) -Force | Out-Null
+        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' SvcHostSplitThresholdInKB DWord ([uint32]$installedKB)
     }
 
-    # Set-CimInstance sur Win32_PageFileSetting renvoie "Valeur hors de la plage" sur pas mal de
-    # builds (round-trip de proprietes read-only cote provider). Get-WmiObject/.Put() evite le
-    # faux succes (l'exception devient catchable), mais peut encore echouer sur certaines
-    # machines si InitialSize et MaximumSize sont pousses dans le meme .Put() - certains
-    # providers WMI valident les deux valeurs contre un etat pas encore rafraichi. On les
-    # pousse donc en 2 appels separes (contournement documente), avec un log de l'etat courant
-    # a chaque etape pour pouvoir diagnostiquer precisement laquelle echoue si ca persiste.
-    $ramMB = [Math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB, 0)
+    # PagingFiles est la valeur que Win32_PageFileSetting et Win32_ComputerSystem ecrivent
+    # eux-memes ; les passer par WMI renvoie "Valeur hors de la plage" sur Win11 (Put() sur
+    # une entree 0/0). Ecriture directe puis relecture. Effet au prochain redemarrage.
+    #   '?:\pagefile.sys'              = gestion automatique
+    #   'C:\pagefile.sys <min> <max>'  = taille fixe
+    $mmPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+    $ramMB  = [Math]::Round($installedKB / 1KB, 0)
     if ($ramMB -ge 32768) {
-        Invoke-Safely "Set pagefile management to automatic (RAM=$ramMB MB >= 32GB)" {
-            $cs = Get-WmiObject Win32_ComputerSystem
-            if (-not $cs.AutomaticManagedPagefile) {
-                $cs.AutomaticManagedPagefile = $true
-                $cs.Put() | Out-Null
-                $script:RebootRequired = $true
-            }
-        }
+        $target = '?:\pagefile.sys'
+        $label  = "automatic (RAM=$ramMB MB >= 32GB)"
     } else {
-        $min = 4096
-        $max = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
-        Write-Log "Pagefile target: RAM=$ramMB MB, Initial=$min MB Maximum=$max MB"
-
-        Invoke-Safely "Disable automatic pagefile management" {
-            $cs = Get-WmiObject Win32_ComputerSystem
-            Write-Log "AutomaticManagedPagefile currently=$($cs.AutomaticManagedPagefile)"
-            if ($cs.AutomaticManagedPagefile) {
-                $cs.AutomaticManagedPagefile = $false
-                $cs.Put() | Out-Null
-            }
-        }
-
-        $pf = Get-WmiObject Win32_PageFileSetting -Filter "Name='C:\\pagefile.sys'" -ErrorAction SilentlyContinue
-        if ($pf) {
-            Write-Log "Existing pagefile setting: Initial=$($pf.InitialSize) MB Maximum=$($pf.MaximumSize) MB"
-            if ($pf.InitialSize -ne $min) {
-                Invoke-Safely "Set pagefile InitialSize to $min MB" {
-                    $pf.InitialSize = $min
-                    $pf.Put() | Out-Null
-                    $script:RebootRequired = $true
-                }
-            }
-            $pf = Get-WmiObject Win32_PageFileSetting -Filter "Name='C:\\pagefile.sys'" -ErrorAction SilentlyContinue
-            if ($pf -and $pf.MaximumSize -ne $max) {
-                Invoke-Safely "Set pagefile MaximumSize to $max MB" {
-                    $pf.MaximumSize = $max
-                    $pf.Put() | Out-Null
-                    $script:RebootRequired = $true
-                }
-            }
-        } else {
-            Invoke-Safely "Create pagefile setting (Initial=$min MB Maximum=$max MB)" {
-                Set-WmiInstance -Class Win32_PageFileSetting -Arguments @{ Name = 'C:\pagefile.sys'; InitialSize = $min; MaximumSize = $max } | Out-Null
-                $script:RebootRequired = $true
-            }
+        $min    = 4096
+        $max    = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
+        $target = "C:\pagefile.sys $min $max"
+        $label  = "Initial=$min MB Maximum=$max MB (RAM=$ramMB MB)"
+    }
+    $currentPf = @((Get-ItemProperty -LiteralPath $mmPath -Name PagingFiles -ErrorAction SilentlyContinue).PagingFiles)
+    if ($currentPf.Count -eq 1 -and $currentPf[0] -eq $target) {
+        Write-Log "OK: pagefile already $label"
+    } else {
+        Invoke-Safely "Set pagefile $label (was '$($currentPf -join ' | ')')" {
+            Set-RegValue $mmPath PagingFiles MultiString ([string[]]@($target))
+            $readBack = @((Get-ItemProperty -LiteralPath $mmPath -Name PagingFiles).PagingFiles)
+            if ($readBack.Count -ne 1 -or $readBack[0] -ne $target) { throw "read back '$($readBack -join ' | ')'" }
+            $script:RebootRequired = $true
         }
     }
 }
@@ -232,8 +269,9 @@ if ($Config.ApplyServiceStartupTweaks) {
 
     # Services optionnels/consommateur -> Manual. Deja exclus (comme dans le script d'origine) :
     # NlaSvc, netprofm, TokenBroker, UsoSvc, WpnService, RemoteAccess, RemoteRegistry (sensibles entreprise).
+    # AppIDSvc exclu : c'est le service d'application des regles AppLocker.
     $manualServices = @(
-        'ALG', 'AppIDSvc', 'AppMgmt', 'AppReadiness', 'Appinfo', 'AssignedAccessManagerSvc', 'AxInstSV', 'BDESVC',
+        'ALG', 'AppMgmt', 'AppReadiness', 'Appinfo', 'AssignedAccessManagerSvc', 'AxInstSV', 'BDESVC',
         'BcastDVRUserService', 'BluetoothUserService', 'BTAGService', 'bthserv', 'CaptureService', 'cbdhsvc',
         'CertPropSvc', 'cloudidsvc', 'COMSysApp', 'ClipSVC', 'ConsentUxUserSvc', 'CredentialEnrollmentManagerUserSvc',
         'CscService', 'DcpSvc', 'dcsvc', 'defragsvc', 'DevQueryBroker', 'DeviceAssociationBroker', 'DeviceAssociationService',
@@ -278,37 +316,37 @@ if ($Config.ApplyServiceStartupTweaks) {
 # (niveau global, service DiagTrack, WER, Delivery Optimization) laisses au repos ---
 if ($Config.Telemetry.DisableFeedbackNotifications) {
     Invoke-Safely "Disable feedback notification popups" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name DoNotShowFeedbackNotifications -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' DoNotShowFeedbackNotifications DWord 1
     }
 }
 if ($Config.Telemetry.DisableAdvertisingId) {
     Invoke-Safely "Disable advertising ID (machine policy)" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' -Name DisabledByGroupPolicy -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' DisabledByGroupPolicy DWord 1
     }
 }
 if ($Config.Telemetry.LimitEnhancedDiagnosticData) {
     Invoke-Safely "Limit enhanced diagnostic data to Desktop/Endpoint Analytics events only" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name LimitEnhancedDiagnosticDataWindowsAnalytics -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' LimitEnhancedDiagnosticDataWindowsAnalytics DWord 1
     }
 }
 if ($Config.Telemetry.DisableRecall) {
     Invoke-Safely "Disable Windows Recall" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Name AllowRecallEnablement -PropertyType DWord -Value 0 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' AllowRecallEnablement DWord 0
     }
 }
 if ($Config.Telemetry.LowerTelemetryLevel) {
     Invoke-Safely "Lower telemetry level to Security (0)" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' -Name AllowTelemetry -PropertyType DWord -Value 0 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' AllowTelemetry DWord 0
     }
 }
 if ($Config.Telemetry.DisableWindowsErrorReporting) {
     Invoke-Safely "Disable Windows Error Reporting" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name Disabled -PropertyType DWord -Value 1 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' Disabled DWord 1
     }
 }
 if ($Config.Telemetry.DisableDeliveryOptimization) {
     Invoke-Safely "Disable Delivery Optimization (P2P update distribution)" {
-        New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Name DODownloadMode -PropertyType DWord -Value 0 -Force | Out-Null
+        Set-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' DODownloadMode DWord 0
     }
 }
 # DisableDiagTrackService est applique plus haut, dans la liste $disabledServices.
@@ -317,14 +355,14 @@ if ($Config.Telemetry.DisableDeliveryOptimization) {
 if ($Config.SetLegacyBootMenu) {
     Invoke-Safely "Enable legacy F8 boot menu" {
         bcdedit /set '{default}' bootmenupolicy legacy | Out-Null
-        $script:RebootRequired = $true
+        if ($LASTEXITCODE -eq 0) { $script:RebootRequired = $true }
     }
 }
 
 # --- Gaming (seul HAGS est porte ; Ultimate Performance et lock P-state GPU volontairement exclus) ---
 if ($Config.ApplyGamingTweaks) {
     Invoke-Safely "Enable Hardware-Accelerated GPU Scheduling" {
-        New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name HwSchMode -PropertyType DWord -Value 2 -Force | Out-Null
+        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' HwSchMode DWord 2
     }
 }
 
@@ -334,49 +372,58 @@ function Set-UserPreferences {
 
     if ($Config.ApplyUserPreferenceTweaks) {
         Invoke-Safely "Explorer opens to This PC ($BaseKey)" {
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name LaunchTo -PropertyType DWord -Value 1 -Force | Out-Null
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" LaunchTo DWord 1
         }
         Invoke-Safely "Enable End Task from taskbar ($BaseKey)" {
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" -Name TaskbarEndTask -PropertyType DWord -Value 1 -Force | Out-Null
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" TaskbarEndTask DWord 1
         }
         Invoke-Safely "Restore full right-click context menu ($BaseKey)" {
-            New-Item -Path "$BaseKey\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" -Force | Out-Null
+            $clsid = "$BaseKey\SOFTWARE\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+            if (-not (Test-Path -LiteralPath $clsid)) { New-Item -Path $clsid -Force | Out-Null }
+            # Valeur par defaut vide (et non absente) : c'est elle qui desactive le menu Win11.
+            Set-ItemProperty -LiteralPath $clsid -Name '(default)' -Value ''
         }
         Invoke-Safely "Speed up menu show delay ($BaseKey)" {
-            New-ItemProperty -Path "$BaseKey\Control Panel\Desktop" -Name MenuShowDelay -PropertyType String -Value '10' -Force | Out-Null
+            Set-RegValue "$BaseKey\Control Panel\Desktop" MenuShowDelay String '10'
         }
     }
 
     if ($Config.DisableConsumerFeatures) {
         Invoke-Safely "Disable Start/Explorer ads and suggestions ($BaseKey)" {
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name BingSearchEnabled -PropertyType DWord -Value 0 -Force | Out-Null
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name ContentDeliveryAllowed -PropertyType DWord -Value 0 -Force | Out-Null
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" -Name 'SubscribedContent-338388Enabled' -PropertyType DWord -Value 0 -Force | Out-Null
-            New-ItemProperty -Path "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name ShowCopilotButton -PropertyType DWord -Value 0 -Force | Out-Null
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" BingSearchEnabled DWord 0
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" ContentDeliveryAllowed DWord 0
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" 'SubscribedContent-338388Enabled' DWord 0
+            Set-RegValue "$BaseKey\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" ShowCopilotButton DWord 0
         }
     }
 }
 
 if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
 
-    $loadedSids = Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
-        Where-Object { $_.PSChildName -match '^S-1-5-21-|^S-1-12-1-' } |
-        Select-Object -ExpandProperty PSChildName
+    # Ancre de fin obligatoire : HKU contient aussi "<SID>_Classes", qui n'est pas une ruche
+    # de profil. Seuls les comptes locaux/AD (S-1-5-21) et Entra (S-1-12-1) sont traites ;
+    # les comptes virtuels EPM (S-1-5-110-*) et de service sont hors perimetre.
+    $userSidPattern = '^S-1-(5-21|12-1)(-\d+)+$'
+
+    $loadedSids = @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match $userSidPattern } |
+        Select-Object -ExpandProperty PSChildName)
 
     foreach ($sid in $loadedSids) {
         Set-UserPreferences -BaseKey "Registry::HKEY_USERS\$sid"
     }
 
-    if (Test-Path 'Registry::HKEY_USERS\TempHive') {
-        Invoke-Safely "Clean up leftover TempHive from a previous run" { reg unload 'HKU\TempHive' | Out-Null }
+    if (Test-Path -LiteralPath 'Registry::HKEY_USERS\TempHive') {
+        Invoke-Safely "Clean up leftover TempHive from a previous run" { reg unload 'HKU\TempHive' }
     }
 
+    # Loaded : ruche ouverte par un autre processus, reg load echouerait.
     $profiles = Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.Special -and $_.SID -notin $loadedSids }
+        Where-Object { -not $_.Special -and -not $_.Loaded -and $_.SID -match $userSidPattern -and $_.SID -notin $loadedSids }
 
     foreach ($profile in $profiles) {
         $hivePath = Join-Path $profile.LocalPath 'NTUSER.DAT'
-        if (-not (Test-Path $hivePath)) { continue }
+        if (-not (Test-Path -LiteralPath $hivePath)) { continue }
         $loadResult = reg load 'HKU\TempHive' "$hivePath" 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Log "SKIPPED: could not load hive for $($profile.LocalPath) -- $loadResult"
@@ -386,20 +433,23 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
         # Force la liberation des handles .NET avant unload, sinon "Access is denied" intermittent.
         [gc]::Collect()
         [gc]::WaitForPendingFinalizers()
-        reg unload 'HKU\TempHive' | Out-Null
+        reg unload 'HKU\TempHive' 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Log "WARNING: could not unload hive for $($profile.LocalPath) -- may still be mounted"
         }
     }
 
     $defaultHive = 'C:\Users\Default\NTUSER.DAT'
-    if (Test-Path $defaultHive) {
-        reg load 'HKU\DefaultHive' $defaultHive | Out-Null
+    if (Test-Path -LiteralPath $defaultHive) {
+        reg load 'HKU\DefaultHive' $defaultHive 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Set-UserPreferences -BaseKey 'Registry::HKEY_USERS\DefaultHive'
             [gc]::Collect()
             [gc]::WaitForPendingFinalizers()
-            reg unload 'HKU\DefaultHive' | Out-Null
+            reg unload 'HKU\DefaultHive' 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Log "WARNING: could not unload Default profile hive -- may still be mounted"
+            }
         } else {
             Write-Log "SKIPPED: could not load Default profile hive"
         }
@@ -408,10 +458,11 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
 
 # --- Marqueur de conformite + flag de reboot (pas de reboot force) ---
 New-Item -Path $MarkerPath -Force | Out-Null
-Set-ItemProperty -Path $MarkerPath -Name AppliedVersion -Value $ScriptVersion -Force
-Set-ItemProperty -Path $MarkerPath -Name LastRun -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Force
-Set-ItemProperty -Path $MarkerPath -Name PendingReboot -Value ([int]$RebootRequired) -Force
+Set-ItemProperty -LiteralPath $MarkerPath -Name AppliedVersion -Value $ScriptVersion -Force
+Set-ItemProperty -LiteralPath $MarkerPath -Name LastRun -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Force
+Set-ItemProperty -LiteralPath $MarkerPath -Name PendingReboot -Value ([int]$RebootRequired) -Force
+Set-ItemProperty -LiteralPath $MarkerPath -Name FailureCount -Value $script:FailureCount -Force
 
-Write-Log "=== Remediation finished. PendingReboot=$RebootRequired ==="
-Write-Output "Remediation applied (v$ScriptVersion). Reboot required: $RebootRequired. Log: $LogFile"
+Write-Log "=== Remediation finished. Failures=$($script:FailureCount) PendingReboot=$RebootRequired ==="
+Write-Output "Remediation applied (v$ScriptVersion). Failures: $($script:FailureCount). Reboot required: $RebootRequired. Log: $LogFile"
 exit 0
