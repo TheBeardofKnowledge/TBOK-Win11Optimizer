@@ -43,9 +43,14 @@ Devices and monitoring > Scripts and remediations > Create:
   `Value out of range` on a number of builds (a known CIM provider quirk with that class -
   it round-trips read-only properties on write). It's a non-terminating error, so the
   original script's `try/catch` never catches it and logs a false "Configured pagefile"
-  success even when nothing changed. `Remediation.ps1` uses the `Get-WmiObject`/`.Put()`
-  path instead, which doesn't have this problem (same fix proposed for the `.bat` script
-  itself in this PR).
+  success even when nothing changed. `Get-WmiObject`/`.Put()` turned out to fail the same
+  way on Windows 11 (on the default `0 0` system-managed entry), so since 1.3.0
+  `Remediation.ps1` writes the `PagingFiles` value under
+  `HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management` directly -
+  the same value WMI itself writes - and reads it back before reporting success. Takes
+  effect on next reboot. The 32 GB "automatic" threshold uses installed RAM
+  (`Win32_PhysicalMemory`), because `TotalPhysicalMemory` excludes hardware-reserved
+  memory and a 32 GB machine reports about 32213 MB.
 - **Conservative defaults for a managed fleet**, toggled via the `$Config` block at the
   top of `Remediation.ps1`:
   - Telemetry is split into individual toggles instead of one on/off switch. The
@@ -60,3 +65,33 @@ Devices and monitoring > Scripts and remediations > Create:
     will want touched centrally.
   - Legacy F8 boot menu, gaming tweaks (except HAGS) and consumer-feature/ad removal are
     off by default - see the comments next to each flag in `Remediation.ps1`.
+
+## Changelog
+
+### 1.3.0
+
+Fixes found by running 1.2.0 elevated on a real Windows 11 machine:
+
+- **Failures logged as `OK`.** `New-ItemProperty` on a missing key raises a
+  non-terminating error, which never reached the `catch` in `Invoke-Safely`. It now runs
+  actions with `ErrorAction Stop` and checks `$LASTEXITCODE` for native tools
+  (`powercfg`, `reg`, `bcdedit`).
+- **Missing registry keys.** `AdvertisingInfo`, `WindowsAI` and
+  `TaskbarDeveloperSettings` don't exist on a fresh install, and `New-ItemProperty` does
+  not create parent keys. New `Set-RegValue` helper creates the key first.
+- **`<SID>_Classes` hives treated as user profiles.** The SID filter `^S-1-12-1-` also
+  matched `S-1-12-1-..._Classes`. It is now anchored (`^S-1-(5-21|12-1)(-\d+)+$`), and
+  virtual-account profiles (`S-1-5-110-*`, e.g. EPM elevation accounts) and already-loaded
+  profiles are skipped.
+- **Pagefile never applied** - see above.
+- **Services.** The current startup type is read from the registry first and nothing is
+  written if it already matches. Almost all "Access denied" failures were on protected
+  services that were already at the target value. Genuine access-denied on a protected
+  service is now logged as `SKIPPED`, not `FAILED`. `AppIDSvc` is no longer forced to
+  Manual: it enforces AppLocker.
+- No more `True`/`False` noise in the output collected by Intune. A `FailureCount` is
+  written to `HKLM:\SOFTWARE\TBOK-Optimizer` and shown in the last output line.
+- Full right-click context menu: the empty default value is now written explicitly.
+- `Detection.ps1` now uses the same RAM calculation and reads the pagefile from
+  `PagingFiles`. Before, detection could never validate the pagefile, so the remediation
+  would have rerun on every cycle.
