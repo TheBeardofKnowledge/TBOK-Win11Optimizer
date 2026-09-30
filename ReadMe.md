@@ -3,16 +3,17 @@ https://buymeacoffee.com/thebeardofl
 
 Yes... It's here, it works, and best of all; it's all based on and verified by Microsoft documentation at learn.microsoft.com
 
-An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, and computer technicians (but you can also use it for personal use)... and it's already getting improvements thanks to your testing and feedback.
+An easy to use, business approved, 1-click Windows 10-11 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
+... and it's already getting improvements thanks to your testing and feedback.
 
-Call this a "Make Windows 11 perform the way it should" script, but I'll likely change it to something more catchy, LOL.
+Call this a "Make Windows perform the way it should" script, but I'll likely change it to something more catchy.
 
 If you haven't noticed, Windows 11 is not fully optimized, in fact, it's very unnecessarily bloated.  We're not talking about special use cases here, we're talking about day to day use.
 What took 1 second in Windows 10 now takes 4 seconds in windows 11.  Multiply that by how many actions you run on a PC and you're talking about A LOT of wasted time. 
 
 WE DON'T HAVE TIME FOR THAT!
 
-It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times.
+It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times.  But there's hope, the Dev's left us a way to change it.
 
 While I love debloat tools like the CTT WinUtil and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, AND for each user... that's extremely inefficient and time consuming... 
 FACT IS, there are soo many beneficial settings to change in Windows that don't have any negative effects and the resulting "experience" is vastly improved.
