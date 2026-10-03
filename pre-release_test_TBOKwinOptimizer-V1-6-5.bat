@@ -23,13 +23,10 @@ color f0
 ::enable holding variables during script,explicitely enable command extensions, disable variable expansions
 setlocal EnableExtensions DisableDelayedExpansion
 
-:: Special scheduled-task mode used only for the one-time post-reboot snapshot.
-if /i "%~1"=="--postboot-memory" goto :PostBootMemoryEntry
-
 ::Script release version and release date 
 :ScriptVersion
 set "VERSION=1.6.5"
-set "VERDATE=09-30-2026"
+set "VERDATE=10-02-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
@@ -73,31 +70,6 @@ if not "%ELEVATE_RC%"=="0" (
 )
 
 exit /b 0
-
-::This helper runs a post-run post-reboot memory snapshot to document ram usage after the script.
-:PostBootMemoryEntry
-setlocal EnableExtensions EnableDelayedExpansion
-
-set "LOGFILE=%~2"
-
-if not defined LOGFILE (
-    exit /b 2
-)
-if not exist "%LOGFILE%" (
-    >"%LOGFILE%" echo([%DATE% %TIME%] WARNING: Original logfile did not exist. A new logfile was created.
-)
-call :CaptureMemorySnapshot "FIVE MINUTES AFTER REBOOT"
-set "PostBootMemoryRC=!ERRORLEVEL!"
-
-schtasks.exe /Delete ^
-    /TN "TBOK Post-Reboot Memory Snapshot" ^
-    /F >nul 2>&1
-if "!PostBootMemoryRC!"=="0" (
-    call :LOG One-time post-reboot memory snapshot completed successfully.
-) else (
-    call :LOG ERROR: Post-reboot memory snapshot failed with exit code !PostBootMemoryRC!.
-)
-endlocal & exit /b %PostBootMemoryRC%
 
 :GotPrivileges
 ECHO Script elevated successfully
@@ -3344,14 +3316,6 @@ call :LOG WARNING: Unexpected restart prompt return code: %RestartChoiceRC%.
 goto :EXIT
 
 :RESTART
-call :SchedulePostRebootMemorySnapshot
-set "PostBootSnapshotRC=!ERRORLEVEL!"
-
-if not "!PostBootSnapshotRC!"=="0" (
-    call :LOG WARNING: The post-reboot memory snapshot could not be scheduled.
-    call :LOG The computer will still be restarted.
-)
-
 call :LOG Restarting PC.
 call :CleanupTemporaryPlans
 
