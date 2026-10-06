@@ -58,13 +58,12 @@ So what does it do?
    7. Disables Webview mode from Windows Search, returning classic search
    8. Disables known Telemitry Data Collection
    9. Disables the Windows OOBE Privacy Settings Experience prompt for new users.
-   10. Disables the lock screen that includes Microsoft ads
-   11. Disables the WPBT feature that allows vendors to execute programs at boot
-   12. Fixes the Network Data Usage Graph not working
-   13. Disables various system telemetry
-   14. Disables various intrusive MS Edge settings, including background startup
-   15. Disables MS Recall from being auto enabled
-   16. Enables verbose logon and logoff messages so you can know what your system is doing
+   10. Disables the WPBT feature that allows vendors to execute programs at boot
+   11. Fixes the Network Data Usage Graph not working
+   12. Disables various system telemetry
+   13. Disables various intrusive MS Edge settings, including background startup
+   14. Disables MS Recall from being auto enabled
+   15. Enables verbose logon and logoff messages so you can know what your system is doing
 
 6. Bloat Removal
    1. Removes MS Co-Pilot standard version systemwide and disables auto reinstall/enable
