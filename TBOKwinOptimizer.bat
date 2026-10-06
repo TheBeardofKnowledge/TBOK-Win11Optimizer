@@ -1545,10 +1545,6 @@ if errorlevel 1 call :LOG ERROR: Failed to set ...
 REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" /v HideEULAPage /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
 if errorlevel 1 call :LOG ERROR: Failed to set ...
 
-call :LOG Disable the lock screen which includes personalized ads - MS Spotlight ads- Default 0
-REG ADD "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f >>"%LOGFILE%" 2>&1
-if errorlevel 1 call :LOG ERROR: Failed to set ...
-
 call :LOG Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
 ::disables it in current config
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f	 >>"%LOGFILE%" 2>&1
