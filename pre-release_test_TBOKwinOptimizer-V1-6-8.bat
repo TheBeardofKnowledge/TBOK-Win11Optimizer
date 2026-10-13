@@ -810,14 +810,14 @@ endlocal & exit /b %TaskPlanRC%
 
 
 :RemoveAppxPattern
-::Helper for for Appx package removal
-::Removes installed Appx packages matching a package name pattern.
-::Usage: call :RemoveAppxPattern "PackagePattern" "Friendly description"
-::Return codes:
-::0 = All-user enumeration/removal completed successfully
-::1 = One or more package queries or removals failed
-::2 = All-user enumeration failed; per-profile SID fallback completed successfully
-::3 = Invalid argument
+:: Helper for installed Appx package removal.
+:: Removes installed Appx packages matching a package name pattern.
+:: Usage: call :RemoveAppxPattern "PackagePattern" "Friendly description"
+:: Return codes:
+:: 0 = All-user enumeration/removal completed successfully
+:: 1 = One or more package queries or removals failed
+:: 2 = All-user enumeration was unavailable; SID fallback succeeded
+:: 3 = Invalid argument
 setlocal DisableDelayedExpansion
 
 set "TBOK_APPX_PATTERN=%~1"
@@ -837,53 +837,58 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "$ErrorActionPreference = 'Stop';" ^
     "$pattern = $env:TBOK_APPX_PATTERN;" ^
     "$label = $env:TBOK_APPX_LABEL;" ^
-    "$allUsersAvailable = $true;" ^
-    "$usedPerUserFallback = $false;" ^
+    "$allUsersAvailable = ($env:TBOK_APPX_ALLUSERS_UNAVAILABLE -ne '1');" ^
+    "$usedPerUserFallback = (-not $allUsersAvailable);" ^
     "$attempted = 0;" ^
     "$removed = 0;" ^
     "$failed = 0;" ^
-    "try {" ^
-    "    if ($env:TBOK_APPX_INVENTORY -and (Test-Path -LiteralPath $env:TBOK_APPX_INVENTORY)) {" ^
-    "        $packages = @(" ^
-    "            Get-Content -LiteralPath $env:TBOK_APPX_INVENTORY -ErrorAction Stop |" ^
-    "            ForEach-Object {" ^
-    "                $parts = $_.Split('|', 2);" ^
-    "                if ($parts.Count -eq 2 -and $parts[0] -like $pattern) {" ^
-    "                    [PSCustomObject]@{" ^
-    "                        Name = $parts[0];" ^
-    "                        PackageFullName = $parts[1]" ^
-    "                    };" ^
-    "                };" ^
-    "            }" ^
-    "        );" ^
-    "    } else {" ^
-    "        $packages = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop);" ^
-    "    };" ^
-    "    foreach ($package in $packages) {" ^
-    "        $attempted++;" ^
-    "        try {" ^
-    "            Write-Output ('Removing installed package for all users: ' + $package.PackageFullName);" ^
-    "            Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop;" ^
-    "            Write-Output ('SUCCESS: Removed installed package for all users: ' + $package.PackageFullName);" ^
-    "            $removed++;" ^
-    "        } catch {" ^
-    "            Write-Output ('ERROR: Failed all-user removal of ' + $package.PackageFullName + ': ' + $_.Exception.Message);" ^
-    "            $failed++;" ^
+    "if (-not $allUsersAvailable) {" ^
+    "    Write-Output ('NOTICE: All-user Appx enumeration was previously found unavailable for this session. Using per-profile SID fallback for ' + $label + '.');" ^
+    "};" ^
+    "if ($allUsersAvailable) {" ^
+    "    try {" ^
+    "        if ($env:TBOK_APPX_INVENTORY -and (Test-Path -LiteralPath $env:TBOK_APPX_INVENTORY)) {" ^
+    "            $packages = @(" ^
+    "                Get-Content -LiteralPath $env:TBOK_APPX_INVENTORY -ErrorAction Stop |" ^
+    "                    ForEach-Object {" ^
+    "                        $parts = $_.Split('|', 2);" ^
+    "                        if ($parts.Count -eq 2 -and $parts[0] -like $pattern) {" ^
+    "                            [PSCustomObject]@{" ^
+    "                                Name = $parts[0];" ^
+    "                                PackageFullName = $parts[1]" ^
+    "                            };" ^
+    "                        };" ^
+    "                    }" ^
+    "            );" ^
+    "        } else {" ^
+    "            $packages = @(Get-AppxPackage -AllUsers -Name $pattern -ErrorAction Stop);" ^
     "        };" ^
+    "        foreach ($package in $packages) {" ^
+    "            $attempted++;" ^
+    "            try {" ^
+    "                Write-Output ('Removing installed package for all users: ' + $package.PackageFullName);" ^
+    "                Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop;" ^
+    "                Write-Output ('SUCCESS: Removed installed package for all users: ' + $package.PackageFullName);" ^
+    "                $removed++;" ^
+    "            } catch {" ^
+    "                Write-Output ('ERROR: Failed all-user removal of ' + $package.PackageFullName + ': ' + $_.Exception.Message);" ^
+    "                $failed++;" ^
+    "            };" ^
+    "        };" ^
+    "    } catch {" ^
+    "        $allUsersAvailable = $false;" ^
+    "        $usedPerUserFallback = $true;" ^
+    "        Write-Output ('WARNING: All-user enumeration failed for ' + $label + ': ' + $_.Exception.Message);" ^
+    "        Write-Output 'Attempting removal separately for every registered local profile SID.';" ^
     "    };" ^
-    "} catch {" ^
-    "    $allUsersAvailable = $false;" ^
-    "    $usedPerUserFallback = $true;" ^
-    "    Write-Output ('WARNING: All-user enumeration failed for ' + $label + ': ' + $_.Exception.Message);" ^
-    "    Write-Output 'Attempting removal separately for every registered local profile SID.';" ^
     "};" ^
     "if (-not $allUsersAvailable) {" ^
     "    $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList';" ^
     "    try {" ^
     "        $profileSids = @(" ^
     "            Get-ChildItem -LiteralPath $profileKey -ErrorAction Stop |" ^
-    "            Where-Object { $_.PSChildName -match '^S-1-(5-21|12-1)-' } |" ^
-    "            Select-Object -ExpandProperty PSChildName -Unique" ^
+    "                Where-Object { $_.PSChildName -match '^S-1-(5-21|12-1)-' } |" ^
+    "                Select-Object -ExpandProperty PSChildName -Unique" ^
     "        );" ^
     "    } catch {" ^
     "        Write-Output ('ERROR: Could not enumerate profile SIDs: ' + $_.Exception.Message);" ^
@@ -963,6 +968,7 @@ exit /b 1
 
 :BuildAppxInventory
 setlocal DisableDelayedExpansion
+
 set "AppxInventoryFile=%TEMP%\TBOK-AppxInventory-%COMPUTERNAME%.txt"
 if exist "%AppxInventoryFile%" (
     del /q "%AppxInventoryFile%" >nul 2>&1
@@ -976,18 +982,22 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "} catch {" ^
     "    exit 1;" ^
     "}" >"%AppxInventoryFile%" 2>nul
+
 set "AppxInventoryRC=%ERRORLEVEL%"
+
 if not "%AppxInventoryRC%"=="0" (
     if exist "%AppxInventoryFile%" (
         del /q "%AppxInventoryFile%" >nul 2>&1
     )
     endlocal & (
         set "TBOK_APPX_INVENTORY="
+        set "TBOK_APPX_ALLUSERS_UNAVAILABLE=1"
         exit /b 1
     )
 )
 endlocal & (
     set "TBOK_APPX_INVENTORY=%TEMP%\TBOK-AppxInventory-%COMPUTERNAME%.txt"
+    set "TBOK_APPX_ALLUSERS_UNAVAILABLE="
     exit /b 0
 )
 
@@ -1188,7 +1198,8 @@ set "WriteRC=%ERRORLEVEL%"
 endlocal & exit /b %WriteRC%
 
 ::helper for writing registry values to avoid writing extra lines of code per command for errors and logging
-:: Avoid using this helper for the bulk per-user section because existing DWORD comparisons launch PowerShell and can increase runtime.
+:: Uses REG QUERY and REG ADD only for faster machine-level registry processing.
+:: Equivalent hexadecimal and decimal DWORD representations may be reapplied.
 :SetRegistryValue
 setlocal EnableDelayedExpansion
 
@@ -1251,10 +1262,13 @@ REG ADD "!RegPath!" ^
 set "RegistryWriteRC=!ERRORLEVEL!"
 
 if not "!RegistryWriteRC!"=="0" (
-    endlocal
-    call :LOG ERROR: Failed to configure %~5. Exit code: !RegistryWriteRC!.
-    exit /b 1
+    for %%R in ("!RegistryWriteRC!") do (
+        endlocal
+        call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
+        exit /b 1
+    )
 )
+
 
 if /I "!ChangeMode!"=="CREATE" (
     endlocal
@@ -1286,14 +1300,6 @@ if "%~3"=="" (
 REG ADD "%~1" /v "%~2" /t "%~3" /d "%~4" /f >nul 2>>"%LOGFILE%"
 set "RegWriteRC=%ERRORLEVEL%"
 if not "%RegWriteRC%"=="0" (
-    if "%~2"=="TaskbarDa" (
-        endlocal
-        exit /b 1
-    )
-    if "%~2"=="ShellFeedsTaskbarViewMode" (
-        endlocal
-        exit /b 1
-    )
     endlocal
     call :LOG ERROR: Failed to configure %~5. Exit code: %RegWriteRC%.
     exit /b 1
@@ -1426,76 +1432,99 @@ exit /b 0
 call :LOG Evaluating Windows MMAgent memory features...
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+    "$ramMB = 0;" ^
+    "$driveType = [string]$env:TBOK_DRIVETYPE;" ^
+    "$criticalFailure = $false;" ^
+    "$optionalFailure = $false;" ^
+    "$changed = $false;" ^
+    "if ($env:TBOK_MEMORY_MB) {" ^
+    "    $ramMB = [int64]$env:TBOK_MEMORY_MB;" ^
+    "};" ^
     "try {" ^
-    "    $ramMB = 0;" ^
-    "    if ($env:TBOK_MEMORY_MB) {" ^
-    "        $ramMB = [int64]$env:TBOK_MEMORY_MB;" ^
-    "    };" ^
-    "    $driveType = [string]$env:TBOK_DRIVETYPE;" ^
     "    $agent = Get-MMAgent -ErrorAction Stop;" ^
-    "    $changed = $false;" ^
-    "    if (-not $agent.MemoryCompression) {" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: Get-MMAgent failed: ' + $_.Exception.Message);" ^
+    "    exit 1;" ^
+    "};" ^
+    "if (-not $agent.MemoryCompression) {" ^
+    "    try {" ^
     "        Enable-MMAgent -MemoryCompression -ErrorAction Stop;" ^
     "        Write-Output 'CHANGED: Memory compression was enabled.';" ^
     "        $changed = $true;" ^
-    "    } else {" ^
-    "        Write-Output 'MATCH: Memory compression is already enabled.';" ^
+    "    } catch {" ^
+    "        Write-Output ('ERROR: Memory compression could not be enabled: ' + $_.Exception.Message);" ^
+    "        $criticalFailure = $true;" ^
     "    };" ^
-    "    if ($ramMB -gt 0 -and $ramMB -le 8192 -and $driveType -eq 'SSD') {" ^
-    "        Write-Output 'Applying TBOK low-memory SSD policy.';" ^
-    "        if ($agent.ApplicationLaunchPrefetching) {" ^
-    "            Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction Stop;" ^
-    "            Write-Output 'CHANGED: Application launch prefetching was disabled.';" ^
-    "            $changed = $true;" ^
-    "        } else {" ^
-    "            Write-Output 'MATCH: Application launch prefetching is already disabled.';" ^
-    "        };" ^
-    "        if ($agent.ApplicationPreLaunch) {" ^
-    "            Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
-    "            Write-Output 'CHANGED: Application prelaunch was disabled.';" ^
-    "            $changed = $true;" ^
-    "        } else {" ^
-    "            Write-Output 'MATCH: Application prelaunch is already disabled.';" ^
-    "        };" ^
-    "        if (-not $agent.PageCombining) {" ^
+    "} else {" ^
+    "    Write-Output 'MATCH: Memory compression is already enabled.';" ^
+    "};" ^
+    "if ($ramMB -gt 0 -and $ramMB -le 12289 -and $driveType -eq 'SSD') {" ^
+    "    Write-Output 'Applying TBOK low-memory SSD policy.';" ^
+    "    try {" ^
+    "        Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction Stop;" ^
+    "        Write-Output 'APPLIED: Application launch prefetching disable was requested.';" ^
+    "        $changed = $true;" ^
+    "    } catch {" ^
+    "        Write-Output ('UNSUPPORTED: Application launch prefetching was left unchanged: ' + $_.Exception.Message);" ^
+    "        $optionalFailure = $true;" ^
+    "    };" ^
+    "    try {" ^
+    "        Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
+    "        Write-Output 'APPLIED: Application prelaunch disable was requested.';" ^
+    "        $changed = $true;" ^
+    "    } catch {" ^
+    "        Write-Output ('UNSUPPORTED: Application prelaunch was left unchanged: ' + $_.Exception.Message);" ^
+    "        $optionalFailure = $true;" ^
+    "    };" ^
+    "    if (-not $agent.PageCombining) {" ^
+    "        try {" ^
     "            Enable-MMAgent -PageCombining -ErrorAction Stop;" ^
     "            Write-Output 'CHANGED: Page combining was enabled.';" ^
     "            $changed = $true;" ^
-    "        } else {" ^
-    "            Write-Output 'MATCH: Page combining is already enabled.';" ^
+    "        } catch {" ^
+    "            Write-Output ('UNSUPPORTED: Page combining was left unchanged: ' + $_.Exception.Message);" ^
+    "            $optionalFailure = $true;" ^
     "        };" ^
     "    } else {" ^
-    "        Write-Output 'Low-memory SSD policy was not applicable.';" ^
-    "        Write-Output 'Application launch prefetching, application prelaunch, and page combining were left unchanged.';" ^
+    "        Write-Output 'MATCH: Page combining is already enabled.';" ^
     "    };" ^
+    "} else {" ^
+    "    Write-Output 'Low-memory SSD policy was not applicable.';" ^
+    "    Write-Output 'Application launch prefetching, application prelaunch, and page combining were left unchanged.';" ^
+    "};" ^
+    "try {" ^
     "    $final = Get-MMAgent -ErrorAction Stop;" ^
     "    Write-Output ('Final MemoryCompression=' + $final.MemoryCompression);" ^
     "    Write-Output ('Final ApplicationLaunchPrefetching=' + $final.ApplicationLaunchPrefetching);" ^
     "    Write-Output ('Final ApplicationPreLaunch=' + $final.ApplicationPreLaunch);" ^
     "    Write-Output ('Final PageCombining=' + $final.PageCombining);" ^
-    "    if ($changed) {" ^
-    "        Write-Output 'NOTICE: One or more MMAgent changes may require a restart before becoming fully effective.';" ^
+    "    if (-not $final.MemoryCompression) {" ^
+    "        Write-Output 'ERROR: Memory compression is not enabled in the final MMAgent state.';" ^
+    "        $criticalFailure = $true;" ^
     "    };" ^
-    "    exit 0;" ^
     "} catch {" ^
-    "    Write-Output ('ERROR: MMAgent configuration failed: ' + $_.Exception.Message);" ^
-    "    exit 1;" ^
-    "}" >>"%LOGFILE%" 2>&1
+    "    Write-Output ('ERROR: Final MMAgent state could not be verified: ' + $_.Exception.Message);" ^
+    "    $criticalFailure = $true;" ^
+    "};" ^
+    "if ($changed) {" ^
+    "    Write-Output 'NOTICE: One or more MMAgent changes may require a restart before becoming fully effective.';" ^
+    "};" ^
+    "if ($optionalFailure) {" ^
+    "    Write-Output 'NOTICE: One or more optional MMAgent features were unsupported and were left unchanged.';" ^
+    "};" ^
+    "if ($criticalFailure) { exit 1 } else { exit 0 }" ^
+    >>"%LOGFILE%" 2>&1
 
 set "MemoryFeaturesRC=!ERRORLEVEL!"
 
 if not "!MemoryFeaturesRC!"=="0" (
-    call :LOG WARNING: MMAgent memory-feature configuration failed.
+    call :LOG WARNING: Required MMAgent memory-feature configuration or verification failed.
     exit /b 1
 )
-
 call :LOG MMAgent memory-feature configuration completed.
 exit /b 0
 
 :: Capture a Windows memory snapshot and write it to the console and logfile.
-:: Usage:
-:: call :CaptureMemorySnapshot "BEFORE"
-:: call :CaptureMemorySnapshot "AFTER"
 :CaptureMemorySnapshot
 setlocal DisableDelayedExpansion
 
@@ -2250,7 +2279,7 @@ call :SetServiceStartup GraphicsPerfSvc demand
 ::deprecated call :SetServiceStartup  HomeGroupProvider demand
 call :SetServiceStartup HvHost demand
 call :SetServiceStartup IEEtwCollectorService demand
-call :SetServiceStartup IKEEXT demand
+::omitforEnterprise IPsec and VPN call :SetServiceStartup IKEEXT demand
 ::ignored call :SetServiceStartup InstallService demand
 call :SetServiceStartup IpxlatCfgSvc demand
 call :SetServiceStartup lfsvc demand
@@ -2487,33 +2516,21 @@ call :LOG Disabling the setting allowing hardware to install whatever software a
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" "PreventDeviceMetadataFromNetwork" "REG_DWORD" "1" "PreventDeviceMetadataFromNetwork"
 
 call :LOG Disable Webview dependency for Search - breaks nothing - puts search back into classic mode
-
 call :SetAllControlSetValues "Control\FeatureManagement\Overrides\8\1694661260" "EnabledState" "REG_DWORD" "1" "Search WebView override EnabledState"
-
 call :SetAllControlSetValues "Control\FeatureManagement\Overrides\8\1694661260" "EnabledStateOptions" "REG_DWORD" "0" "Search WebView override EnabledStateOptions"
-
 call :SetAllControlSetValues "Control\FeatureManagement\Overrides\8\1694661260" "Variant" "REG_DWORD" "0" "Search WebView override Variant"
-
 call :SetAllControlSetValues "Control\FeatureManagement\Overrides\8\1694661260" "VariantPayload" "REG_DWORD" "0" "Search WebView override VariantPayload"
-
 call :SetAllControlSetValues "Control\FeatureManagement\Overrides\8\1694661260" "VariantPayloadKind" "REG_DWORD" "0" "Search WebView override VariantPayloadKind"
 
 ::Control OOBE experience for new users or major updates-testing needed to confirm but it is documented
 call :LOG Disable privacy settings experience at first OOBE logon
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "DisablePrivacyExperience" "REG_DWORD" "1" "OOBE policy DisablePrivacyExperience"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "BypassNRO" "REG_DWORD" "1" "BypassNRO policy"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "SkipMachineOOBE" "REG_DWORD" "1" "SkipMachineOOBE"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "DisableVoice" "REG_DWORD" "1" "DisableVoice"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "PrivacyConsentStatus" "REG_DWORD" "1" "PrivacyConsentStatus"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "Protectyourpc" "REG_DWORD" "3" "ProtectYourPC"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\OOBE" "HideEULAPage" "REG_DWORD" "1" "HideEULAPage"
-
 
 call :LOG Restore the lock screen now that personalized ads are removed.
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen" "REG_DWORD" "0" "NoLockScreen"
@@ -2529,27 +2546,16 @@ call :SetAllControlSetValues "Services\Ndu" "Start" "REG_DWORD" "2" "Ndu service
 :systemtelemetry
 call :LOG Disabling Windows System Telemetry Data Collection through Registry
 call :LOG Turning off telemetry data collection Local Machine
-
 call :SetAllControlSetValues "Control\WMI\AutoLogger\Diagtrack-Listener" "Start" "REG_DWORD" "0" "Diagtrack-Listener AutoLogger startup mode"
-
 call :SetAllControlSetValues "Services\DiagTrack" "Start" "REG_DWORD" "4" "DiagTrack service startup mode"
-
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection" "AllowDesktopAnalyticsProcessing" "REG_DWORD" "0" "AllowDesktopAnalyticsProcessing"
-
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" "REG_DWORD" "0" "DataCollection policy AllowTelemetry"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" "REG_DWORD" "0" "Wow6432Node DataCollection policy AllowTelemetry"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" "AllowTelemetry" "REG_DWORD" "0" "CurrentVersion DataCollection AllowTelemetry"
-
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection" "DoNotShowFeedbackNotifications" "REG_DWORD" "1" "DoNotShowFeedbackNotifications"
-
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection" "DiagTrack" "REG_DWORD" "0" "DiagTrack"
-
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection" "LimitEnhancedDiagnosticDataWindowsAnalytics" "REG_DWORD" "1" "LimitEnhancedDiagnosticDataWindowsAnalytics"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" "DisabledByGroupPolicy" "REG_DWORD" "1" "DisabledByGroupPolicy"
-
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" "Disabled" "REG_DWORD" "1" "Disable Error Reporting"
 
 call :LOG Disable Powershell telemetry
@@ -2560,6 +2566,8 @@ call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryO
 
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" "DODownloadMode" "REG_DWORD" "0" "Delivery Optimization policy DODownloadMode"
 
+call :LOG Disabling Windows Feeds through machine policy
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" "EnableFeeds" "REG_DWORD" "0" "Machine policy EnableFeeds"
 
 :EdgeTweaks
 call :LOG Disabling MS Edge Automatic Background Startup
@@ -2588,7 +2596,6 @@ call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Edge" "EdgeShoppingAssi
 call :LOG Enabling MS Edge PC gaming mode for lower CPU usage while Gaming
 ::While this serves to lower CPU resource usage for the browser - it also monitors everything running
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Edge" "GamerModeEnabled" "REG_DWORD" "1" "GamerModeEnabled"
-
 
 call :LOG Disable MS Edge Sending Browser Usage DiagnosticData 0
 call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Edge" "DiagnosticData" "REG_DWORD" "0" "DiagnosticData"
@@ -2767,6 +2774,7 @@ if errorlevel 1 (
 ) else (
     call :LOG Scheduled-task processing completed successfully.
 )
+
 ::ENABLE THIS Task and test how annoying it would be. Linux notifies the user when their drive is about to die, why not windows
 ::Notifies you when your hard drive reports faults in S.M.A.R.T. data at logon - help in data loss prevention
 ::call :EnableTask "Microsoft\Windows\DiskDiagnostic\" "Microsoft-Windows-DiskDiagnosticResolver"
@@ -2787,11 +2795,10 @@ goto UserRegistryDeployment
 
 :ApplySettings
 call :LOG ========= Apply Tweaks to User Registry Hives and Default ==============
-
 set "BASE=%~1"
 if not defined BASE (
-    call :LOG ERROR ApplySettings called with no registry hive
-    goto :eof
+    call :LOG ERROR: ApplySettings called with no registry hive.
+    exit /b 2
 )
 call :LOG *****************************************************************
 call :LOG Applying User Registry settings to %BASE%
@@ -2844,22 +2851,15 @@ call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Ex
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAI" "REG_DWORD" "0" "TaskbarAI for %BASE%"
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowCopilotButton" "REG_DWORD" "0" "ShowCopilotButton for %BASE%"
 
-::Disable alpha blending selection
+::Enable alpha blending selection
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ListviewAlphaSelect" "REG_DWORD" "1" "ListViewAlphaSelect for %BASE%"
 
-::disable list view shadows
+::Enable list view shadows
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ListviewShadow" "REG_DWORD" "1" "ListViewShadow for %BASE%"
 
 ::Disable the people icon on the taskbar
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarMn" "REG_DWORD" "0" "TaskbarMn for %BASE%"
 
-::Disable Taskbar widgets icon -not uninstall - thats done later in the script
-call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa" "REG_DWORD" "0" "TaskbarDa for %BASE%"
-if errorlevel 1 (
-    call :LOG NOTICE: TaskbarDa was not writable for %BASE%. Widgets removal and policy controls remain in effect.
-) else (
-    call :LOG TaskbarDa disabled for %BASE%.
-)
 ::Enable dragging full windows instead of just the frame
 call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "DragFullWindows" "REG_SZ" "1" "DragFullWindows for %BASE%"
 
@@ -2947,18 +2947,6 @@ call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Policies\Microsoft\Windows\CloudCon
 
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager" "EnthusiastMode" "REG_DWORD" "1" "EnthusiastMode for %BASE%"
 
-call :LOG disable windows feeds for users
-::WindowsPro, Enterprise, LTSC
-call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" "EnableFeeds" "REG_DWORD" "0" "EnableFeeds for %BASE%"
-
-:: Windows Home and legacy Feeds taskbar preference.
-call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Feeds" "ShellFeedsTaskbarViewMode" "REG_DWORD" "2" "ShellFeedsTaskbarViewMode for %BASE%"
-if errorlevel 1 (
-    call :LOG NOTICE: ShellFeedsTaskbarViewMode was not writable for %BASE%.
-    call :LOG NOTICE: The policy-level Windows Feeds setting was applied successfully.
-) else (
-    call :LOG ShellFeedsTaskbarViewMode configured for %BASE%.
-)
 call :LOG Disabling start menu ads method 2
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Start_IrisRecommendations" "REG_DWORD" "0" "Start_IrisRecommendations %BASE%"
 
@@ -3015,7 +3003,9 @@ call :SetRegistryValueQuiet "%BASE%\Control Panel\Accessibility\StickyKeys" "Fla
 ::call :SetRegistryValueQuiet "%BASE%\System\GameConfigStore" "GameDVR_FSEBehaviorMode" "REG_DWORD" "2" "GameDVR_FSEBehaviorMode for %BASE%"
 ::call :SetRegistryValueQuiet "%BASE%\System\GameConfigStore" "GameDVR_HonorUserFSEBehaviorMode" "REG_DWORD" "0" "GameDVR_HonorUserFSEBehaviorMode for %BASE%"
 ::call :SetRegistryValueQuiet "%BASE%\System\GameConfigStore" "GameDVR_EFSEFeatureFlags" "REG_DWORD" "0" "GameDVR_EFSEFeatureFlags for %BASE%"
-goto :eof
+
+set "BASE="
+exit /b 0
 
 ::********************************END of USER REGISTRY SETTINGS TO APPLY********************************
 :IsProfileHiveLoaded
@@ -3051,6 +3041,10 @@ set "LoadedUserHiveCount=0"
 for /f "delims=" %%U in ('REG query HKEY_USERS 2^>nul ^| findstr /B /I /L /C:"HKEY_USERS\S-1-5-21-" /C:"HKEY_USERS\S-1-12-1-" ^| findstr /V /I /C:"_Classes"') do (
     set /a "LoadedUserHiveCount+=1"
     call :ApplySettings "%%U"
+    set "LoadedUserSettingsRC=!ERRORLEVEL!"
+        if not "!LoadedUserSettingsRC!"=="0" (
+        call :LOG WARNING: ApplySettings did not complete for loaded hive %%U. Exit code: !LoadedUserSettingsRC!.
+    )
 )
 
 if "!LoadedUserHiveCount!"=="0" (
@@ -3060,12 +3054,13 @@ if "!LoadedUserHiveCount!"=="0" (
 )
 
 set "LoadedUserHiveCount="
+set "LoadedUserSettingsRC="
 :: ================================
 :: 2. ALL USER PROFILES
 :: ================================
 call :LOG Processing user profiles (NTUSER.DAT)
 
-for /f "delims=" %%D in ('dir /b /ad "%SystemDrive%\Users" 2^>nul ^| findstr /V /I /X /C:"Public" /C:"Default" /C:"Default User"') do (
+for /f "delims=" %%D in ('dir /b /ad "%SystemDrive%\Users" 2^>nul ^| findstr /V /I /X /C:"Public" /C:"Default" /C:"Default User" /C:"All Users"') do (
     set "PROFILE_NAME=%%D"
     set "PROFILE_PATH=%SystemDrive%\Users\%%D"
 	
@@ -3326,26 +3321,34 @@ call :SetAllControlSetValues "Control\Power\PowerThrottling" "NoLazyMode" "REG_D
 call :LOG Setting the undocumented AlwaysOn power-throttling value to 0.
 call :SetAllControlSetValues "Control\Power\PowerThrottling" "AlwaysOn" "REG_DWORD" "0" "Power throttling AlwaysOn"
 
-call :LOG Enabling Ultimate Performance power plan for desktops only
-call :LOG Creating and activating Ultimate Performance power plan...
-
+call :LOG Enabling Ultimate Performance power plan for physical desktops only
 set "ULTIMATE_GUID="
 
-for /f "tokens=4" %%G in ('powercfg.exe -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2^>nul') do (
-    set "ULTIMATE_GUID=%%G"
+for /f "tokens=4" %%G in ('powercfg.exe /list 2^>nul ^| findstr /I /C:"Ultimate Performance"') do (
+    if not defined ULTIMATE_GUID set "ULTIMATE_GUID=%%G"
+)
+
+if defined ULTIMATE_GUID (
+    call :LOG Existing Ultimate Performance plan found: !ULTIMATE_GUID!
+) else (
+    call :LOG Ultimate Performance plan was not found. Creating it...
+    for /f "tokens=4" %%G in ('powercfg.exe -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2^>nul') do (
+        if not defined ULTIMATE_GUID set "ULTIMATE_GUID=%%G"
+    )
 )
 
 if not defined ULTIMATE_GUID (
-    call :LOG WARNING: Could not create the Ultimate Performance power plan.
+    call :LOG WARNING: Could not find or create the Ultimate Performance power plan.
 ) else (
     powercfg.exe /setactive !ULTIMATE_GUID! >>"%LOGFILE%" 2>&1
-
     if errorlevel 1 (
         call :LOG ERROR: Failed to activate Ultimate Performance plan !ULTIMATE_GUID!.
     ) else (
         call :LOG Ultimate Performance plan activated: !ULTIMATE_GUID!
     )
 )
+
+set "ULTIMATE_GUID="
 goto :GamingTweaksComplete
 
 :unknownchassisgaming
