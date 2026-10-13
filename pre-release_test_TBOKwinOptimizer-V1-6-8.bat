@@ -2543,6 +2543,17 @@ call :SetAllControlSetValues "Control\FirmwareResources" "WPBT" "REG_BINARY" "00
 call :LOG Fix Network Data Usage Graph not working
 call :SetAllControlSetValues "Services\Ndu" "Start" "REG_DWORD" "2" "Ndu service startup mode"
 
+call :LOG Limiting Microsoft Defender scan CPU usage during scheduled and manual scans only - realtime protection is unaffected.
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Scan" "ScanAvgCPULoadFactor" "REG_DWORD" "25" "Defender ScanAvgCPULoadFactor"
+
+call :LOG Configuring Storage Sense for automatic disk cleanup in low disk space conditions
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal" "REG_DWORD" "1" "AllowStorageSenseGlobal"
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseTemporaryFilesCleanup" "REG_DWORD" "1" "AllowStorageSenseTemporaryFilesCleanup"
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "ConfigStorageSenseGlobalCadence" "REG_DWORD" "0" "Storage Sense cadence"
+call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "ConfigStorageSenseRecycleBinCleanupThreshold" "REG_DWORD" "30" "Recycle Bin cleanup threshold"
+::call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "ConfigStorageSenseGlobalCadence" "REG_DWORD" "30" "Storage Sense monthly cadence"
+call :LOG Storage Sense enabled with temporary-file cleanup when disk space is low.
+
 :systemtelemetry
 call :LOG Disabling Windows System Telemetry Data Collection through Registry
 call :LOG Turning off telemetry data collection Local Machine
