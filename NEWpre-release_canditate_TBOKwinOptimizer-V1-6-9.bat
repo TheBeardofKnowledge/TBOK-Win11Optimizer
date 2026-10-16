@@ -3479,20 +3479,38 @@ goto unknownchassisgaming
 
 :laptopgaming
 call :LOG Laptop detected - desktop-only power tweaks were skipped.
+
 call :LOG Unlocking all hidden Power Plan attributes
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-"$items = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse;" ^
-"$items | Where-Object { $_.Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' } | ForEach-Object { Set-ItemProperty $_.PSPath -Name Attributes -Value 2 -Force }" ^
->>"%LOGFILE%" 2>&1
+set "TBOK_POWER_UNLOCK=%TEMP%\TBOK-PowerUnlock-%RANDOM%-%RANDOM%.ps1"
+
+(
+echo $keys = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue
+echo foreach ^($key in $keys^) ^{
+echo     try ^{
+echo         if ^($key.Name -notmatch 'DefaultPowerSchemeValues'^) ^{
+echo             Set-ItemProperty -Path $key.PSPath -Name Attributes -Value 2 -Force -ErrorAction SilentlyContinue
+echo         ^}
+echo     ^}
+echo     catch ^{
+echo     ^}
+echo ^}
+) > "!TBOK_POWER_UNLOCK!"
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "!TBOK_POWER_UNLOCK!" >>"%LOGFILE%" 2>&1
 
 set "PowerUnlockRC=!ERRORLEVEL!"
+
+if exist "!TBOK_POWER_UNLOCK!" (
+    del /q "!TBOK_POWER_UNLOCK!" >nul 2>&1
+)
 
 if not "!PowerUnlockRC!"=="0" (
     call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
 ) else (
     call :LOG Hidden power-plan settings unlocked successfully.
 )
+
 
 Call :LOG Activating Processor Performance Boost Mode 3 for Efficient Agressive
 powercfg -attributes sub_processor perfboostmode -attrib_hide
@@ -3555,18 +3573,35 @@ powercfg -s scheme_current
 
 call :LOG Unlocking all hidden Power Plan attributes
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-"$items = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse;" ^
-"$items | Where-Object { $_.Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' } | ForEach-Object { Set-ItemProperty $_.PSPath -Name Attributes -Value 2 -Force }" ^
->>"%LOGFILE%" 2>&1
+set "TBOK_POWER_UNLOCK=%TEMP%\TBOK-PowerUnlock-%RANDOM%-%RANDOM%.ps1"
+
+(
+echo $keys = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue
+echo foreach ^($key in $keys^) ^{
+echo     try ^{
+echo         if ^($key.Name -notmatch 'DefaultPowerSchemeValues'^) ^{
+echo             Set-ItemProperty -Path $key.PSPath -Name Attributes -Value 2 -Force -ErrorAction SilentlyContinue
+echo         ^}
+echo     ^}
+echo     catch ^{
+echo     ^}
+echo ^}
+) > "!TBOK_POWER_UNLOCK!"
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "!TBOK_POWER_UNLOCK!" >>"%LOGFILE%" 2>&1
 
 set "PowerUnlockRC=!ERRORLEVEL!"
+
+if exist "!TBOK_POWER_UNLOCK!" (
+    del /q "!TBOK_POWER_UNLOCK!" >nul 2>&1
+)
 
 if not "!PowerUnlockRC!"=="0" (
     call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
 ) else (
     call :LOG Hidden power-plan settings unlocked successfully.
 )
+
 set "ULTIMATE_GUID="
 
 goto :GamingTweaksComplete
