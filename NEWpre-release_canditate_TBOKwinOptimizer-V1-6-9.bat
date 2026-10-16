@@ -3479,10 +3479,20 @@ goto unknownchassisgaming
 
 :laptopgaming
 call :LOG Laptop detected - desktop-only power tweaks were skipped.
-Call :LOG Unlocking all hidden Power Plan attributes
+call :LOG Unlocking all hidden Power Plan attributes
+
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-" (gci 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse).Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' |" ^
-" % { sp $_.Replace('HKEY_LOCAL_MACHINE','HKLM:') -Name 'Attributes' -Value 2 -Force }"
+"$items = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse;" ^
+"$items | Where-Object { $_.Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' } | ForEach-Object { Set-ItemProperty $_.PSPath -Name Attributes -Value 2 -Force }" ^
+>>"%LOGFILE%" 2>&1
+
+set "PowerUnlockRC=!ERRORLEVEL!"
+
+if not "!PowerUnlockRC!"=="0" (
+    call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
+) else (
+    call :LOG Hidden power-plan settings unlocked successfully.
+)
 
 Call :LOG Activating Processor Performance Boost Mode 3 for Efficient Agressive
 powercfg -attributes sub_processor perfboostmode -attrib_hide
@@ -3543,10 +3553,20 @@ powercfg -s scheme_current
 powercfg -setdcvalueindex scheme_current sub_processor perfboostmode 2
 powercfg -s scheme_current
 
-Call :LOG Unlocking all hidden Power Plan attributes
+call :LOG Unlocking all hidden Power Plan attributes
+
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-" (gci 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse).Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' |" ^
-" % { sp $_.Replace('HKEY_LOCAL_MACHINE','HKLM:') -Name 'Attributes' -Value 2 -Force }"
+"$items = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse;" ^
+"$items | Where-Object { $_.Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' } | ForEach-Object { Set-ItemProperty $_.PSPath -Name Attributes -Value 2 -Force }" ^
+>>"%LOGFILE%" 2>&1
+
+set "PowerUnlockRC=!ERRORLEVEL!"
+
+if not "!PowerUnlockRC!"=="0" (
+    call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
+) else (
+    call :LOG Hidden power-plan settings unlocked successfully.
+)
 set "ULTIMATE_GUID="
 
 goto :GamingTweaksComplete
