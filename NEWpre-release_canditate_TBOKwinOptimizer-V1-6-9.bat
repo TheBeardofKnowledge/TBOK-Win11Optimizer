@@ -523,6 +523,32 @@ if defined TBOK_ROLLBACK_ALREADY_VERIFIED (
     call :LOG Reusing the existing restore-point and registry-backup state.
     exit /b 0
 )
+set "TBOK_BACKUPS_ALREADY_EXIST=0"
+set "TBOK_TODAY="
+
+for /f "delims=" %%A in (
+    'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd"'
+) do (
+    set "TBOK_TODAY=%%A"
+)
+
+for /d %%D in ("%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-*") do (
+    echo(%%~nxD | findstr /C:"!TBOK_TODAY!" >nul
+
+    if not errorlevel 1 (
+        set "TBOK_BACKUPS_ALREADY_EXIST=1"
+    )
+)
+
+if "!TBOK_BACKUPS_ALREADY_EXIST!"=="1" (
+    call :LOG Rollback backup directory from today was already found.
+    call :LOG Skipping restore-point creation and registry-export generation.
+    set "TBOK_ROLLBACK_ALREADY_VERIFIED=1"
+    exit /b 0
+)
+
+set "TBOK_BACKUPS_ALREADY_EXIST="
+set "TBOK_TODAY="
 call :PrepareRollbackProtection
 set "RollbackRC=!ERRORLEVEL!"
 if "!RollbackRC!"=="0" (
