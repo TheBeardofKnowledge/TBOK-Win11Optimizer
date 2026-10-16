@@ -20,6 +20,7 @@
 :: /gaming - apply gaming tweaks 
 :: /winget - full auto software update using WinGet
 :: /newlog - starts a new log file for the workstation being run on, if not it will reuse existing
+:: /restart - restarts the computer after all requested noninteractive operations complete
 
 ::turn off echoing all commands
 @ECHO OFF
@@ -31,8 +32,8 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.6.8"
-set "VERDATE=10-12-2026"
+set "VERSION=1.6.9"
+set "VERDATE=10-16-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
@@ -150,28 +151,88 @@ endlocal
 exit /b 0
 
 :Switches
-:: Command-line routing for PowerShell, remote, and unattended execution
+set "TBOK_RUN_OPTIMIZE="
+set "TBOK_RUN_CLEANUP="
+set "TBOK_RUN_GAMING="
+set "TBOK_RUN_WINGET="
+set "TBOK_RUN_EXIT="
+set "TBOK_RUN_RESTART="
+set "TBOK_ARGUMENT_ERROR=0"
+
+if "%~1"=="" goto :MENU
+
+:ParseNextArgument
+if "%~1"=="" goto :ArgumentsParsed
+
 if /I "%~1"=="/OPTIMIZE" (
-    set "TBOK_NONINTERACTIVE=1"
-    goto :SYSTEMTWEAKS
+    set "TBOK_RUN_OPTIMIZE=1"
+    shift
+    goto :ParseNextArgument
 )
 if /I "%~1"=="/CLEANUP" (
-    set "TBOK_NONINTERACTIVE=1"
-    goto :BeardSweeper
+    set "TBOK_RUN_CLEANUP=1"
+    shift
+    goto :ParseNextArgument
 )
 if /I "%~1"=="/GAMING" (
-    set "TBOK_NONINTERACTIVE=1"
-    goto :GamingTweaks
+    set "TBOK_RUN_GAMING=1"
+    shift
+    goto :ParseNextArgument
 )
 if /I "%~1"=="/WINGET" (
-    set "TBOK_NONINTERACTIVE=1"
-    goto :WinGet
+    set "TBOK_RUN_WINGET=1"
+    shift
+    goto :ParseNextArgument
+)
+if /I "%~1"=="/RESTART" (
+    set "TBOK_RUN_RESTART=1"
+    shift
+    goto :ParseNextArgument
 )
 if /I "%~1"=="/EXIT" (
-    set "TBOK_NONINTERACTIVE=1"
+    set "TBOK_RUN_EXIT=1"
+    shift
+    goto :ParseNextArgument
+)
+if /I "%~1"=="/NEWLOG" (
+    shift
+    goto :ParseNextArgument
+)
+call :LOG ERROR: Unknown command-line option: %~1
+set "TBOK_ARGUMENT_ERROR=1"
+shift
+goto :ParseNextArgument
+
+:ArgumentsParsed
+if "!TBOK_ARGUMENT_ERROR!"=="1" (
+    call :LOG ERROR: The requested command-line sequence was not started because one or more options were invalid.
     goto :EXIT
 )
+if defined TBOK_RUN_EXIT (
+    if defined TBOK_RUN_OPTIMIZE (
+        call :LOG ERROR: /EXIT cannot be combined with operation switches.
+        goto :EXIT
+    )
+    if defined TBOK_RUN_CLEANUP (
+        call :LOG ERROR: /EXIT cannot be combined with operation switches.
+        goto :EXIT
+    )
+    if defined TBOK_RUN_GAMING (
+        call :LOG ERROR: /EXIT cannot be combined with operation switches.
+        goto :EXIT
+    )
+    if defined TBOK_RUN_WINGET (
+        call :LOG ERROR: /EXIT cannot be combined with operation switches.
+        goto :EXIT
+    )
+    goto :EXIT
+)
+if defined TBOK_RUN_OPTIMIZE goto :NonInteractiveSequence
+if defined TBOK_RUN_CLEANUP goto :NonInteractiveSequence
+if defined TBOK_RUN_GAMING goto :NonInteractiveSequence
+if defined TBOK_RUN_WINGET goto :NonInteractiveSequence
 goto :MENU
+
 
 :PrepareRollbackProtection
 call :LOG Before anything is modified - creating a system restore point.
@@ -1427,101 +1488,123 @@ if not defined TBOK_MEMORY_MB exit /b 1
 if not defined TBOK_MEMORY_GB exit /b 1
 exit /b 0
 
-:: Configure documented MMAgent features according to the cached hardware profile.
+:ResolveMemoryPolicy
+:: Low-memory systems keep SysMain Automatic so MMAgent workers remain available.
+:: This policy applies to SSD, HDD, RAID, and unknown storage.
+:: Higher-memory systems use the storage-based SysMain policy and do not modify MMAgent.
+set "TBOK_SYSMAIN_MODE=unchanged"
+set "TBOK_LOW_MEMORY=0"
+set "TBOK_MANAGE_MMAGENT=0"
+
+if not defined TBOK_MEMORY_MB (
+    call :LOG ERROR: Installed RAM is unavailable.
+    call :LOG The SysMain and MMAgent policy could not be resolved.
+    exit /b 1
+)
+if !TBOK_MEMORY_MB! LEQ 12288 (
+    set "TBOK_LOW_MEMORY=1"
+    set "TBOK_MANAGE_MMAGENT=1"
+    set "TBOK_SYSMAIN_MODE=auto"
+) else if /I "!TBOK_DRIVETYPE!"=="SSD" (
+    set "TBOK_SYSMAIN_MODE=disabled"
+) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
+    set "TBOK_SYSMAIN_MODE=demand"
+)
+call :LOG Resolved memory policy:
+call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
+call :LOG Storage profile: !TBOK_DRIVETYPE!
+call :LOG Low-memory profile: !TBOK_LOW_MEMORY!
+call :LOG Manage MMAgent features: !TBOK_MANAGE_MMAGENT!
+call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
+exit /b 0
+
+:: Configure MMAgent features only for the low-memory profile.
 :ConfigureMemoryFeatures
-call :LOG Evaluating Windows MMAgent memory features...
+if not "!TBOK_MANAGE_MMAGENT!"=="1" (
+    call :LOG MMAgent settings were left unchanged because this is not a low-memory profile.
+    exit /b 0
+)
+
+call :LOG Configuring SysMain and MMAgent for the low-memory profile...
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$ramMB = 0;" ^
-    "$driveType = [string]$env:TBOK_DRIVETYPE;" ^
     "$criticalFailure = $false;" ^
     "$optionalFailure = $false;" ^
-    "$changed = $false;" ^
-    "if ($env:TBOK_MEMORY_MB) {" ^
-    "    $ramMB = [int64]$env:TBOK_MEMORY_MB;" ^
-    "};" ^
     "try {" ^
-    "    $agent = Get-MMAgent -ErrorAction Stop;" ^
+    "    Set-Service -Name SysMain -StartupType Automatic -ErrorAction Stop;" ^
+    "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
+    "    if ($sysMain.Status -ne 'Running') {" ^
+    "        Start-Service -Name SysMain -ErrorAction Stop;" ^
+    "        $sysMain.WaitForStatus('Running', (New-TimeSpan -Seconds 15));" ^
+    "    };" ^
+    "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
+    "    Write-Output ('SysMain startup target=Automatic; Status=' + $sysMain.Status);" ^
+    "    if ($sysMain.Status -ne 'Running') { throw 'SysMain did not reach the Running state.' };" ^
     "} catch {" ^
-    "    Write-Output ('ERROR: Get-MMAgent failed: ' + $_.Exception.Message);" ^
+    "    Write-Output ('ERROR: SysMain could not be prepared for MMAgent: ' + $_.Exception.Message);" ^
     "    exit 1;" ^
     "};" ^
-    "if (-not $agent.MemoryCompression) {" ^
-    "    try {" ^
-    "        Enable-MMAgent -MemoryCompression -ErrorAction Stop;" ^
-    "        Write-Output 'CHANGED: Memory compression was enabled.';" ^
-    "        $changed = $true;" ^
-    "    } catch {" ^
-    "        Write-Output ('ERROR: Memory compression could not be enabled: ' + $_.Exception.Message);" ^
-    "        $criticalFailure = $true;" ^
-    "    };" ^
-    "} else {" ^
-    "    Write-Output 'MATCH: Memory compression is already enabled.';" ^
+    "try {" ^
+    "    Enable-MMAgent -MemoryCompression -ErrorAction Stop;" ^
+    "    Write-Output 'APPLIED: Memory compression enable was requested.';" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: Memory compression could not be enabled: ' + $_.Exception.Message);" ^
+    "    $criticalFailure = $true;" ^
     "};" ^
-    "if ($ramMB -gt 0 -and $ramMB -le 12289 -and $driveType -eq 'SSD') {" ^
-    "    Write-Output 'Applying TBOK low-memory SSD policy.';" ^
-    "    try {" ^
-    "        Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction Stop;" ^
-    "        Write-Output 'APPLIED: Application launch prefetching disable was requested.';" ^
-    "        $changed = $true;" ^
-    "    } catch {" ^
-    "        Write-Output ('UNSUPPORTED: Application launch prefetching was left unchanged: ' + $_.Exception.Message);" ^
-    "        $optionalFailure = $true;" ^
-    "    };" ^
-    "    try {" ^
-    "        Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
-    "        Write-Output 'APPLIED: Application prelaunch disable was requested.';" ^
-    "        $changed = $true;" ^
-    "    } catch {" ^
-    "        Write-Output ('UNSUPPORTED: Application prelaunch was left unchanged: ' + $_.Exception.Message);" ^
-    "        $optionalFailure = $true;" ^
-    "    };" ^
-    "    if (-not $agent.PageCombining) {" ^
-    "        try {" ^
-    "            Enable-MMAgent -PageCombining -ErrorAction Stop;" ^
-    "            Write-Output 'CHANGED: Page combining was enabled.';" ^
-    "            $changed = $true;" ^
-    "        } catch {" ^
-    "            Write-Output ('UNSUPPORTED: Page combining was left unchanged: ' + $_.Exception.Message);" ^
-    "            $optionalFailure = $true;" ^
-    "        };" ^
-    "    } else {" ^
-    "        Write-Output 'MATCH: Page combining is already enabled.';" ^
-    "    };" ^
-    "} else {" ^
-    "    Write-Output 'Low-memory SSD policy was not applicable.';" ^
-    "    Write-Output 'Application launch prefetching, application prelaunch, and page combining were left unchanged.';" ^
+    "try {" ^
+    "    Enable-MMAgent -PageCombining -ErrorAction Stop;" ^
+    "    Write-Output 'APPLIED: Page combining enable was requested.';" ^
+    "} catch {" ^
+    "    Write-Output ('ERROR: Page combining could not be enabled: ' + $_.Exception.Message);" ^
+    "    $criticalFailure = $true;" ^
+    "};" ^
+    "try {" ^
+    "    Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
+    "    Write-Output 'APPLIED: Application prelaunch disable was requested.';" ^
+    "} catch {" ^
+    "    Write-Output ('NOTICE: Application prelaunch was left unchanged: ' + $_.Exception.Message);" ^
+    "    $optionalFailure = $true;" ^
     "};" ^
     "try {" ^
     "    $final = Get-MMAgent -ErrorAction Stop;" ^
+    "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
+    "    Write-Output ('Final SysMainStatus=' + $sysMain.Status);" ^
     "    Write-Output ('Final MemoryCompression=' + $final.MemoryCompression);" ^
     "    Write-Output ('Final ApplicationLaunchPrefetching=' + $final.ApplicationLaunchPrefetching);" ^
     "    Write-Output ('Final ApplicationPreLaunch=' + $final.ApplicationPreLaunch);" ^
+    "    Write-Output ('Final OperationAPI=' + $final.OperationAPI);" ^
     "    Write-Output ('Final PageCombining=' + $final.PageCombining);" ^
+    "    if ($sysMain.Status -ne 'Running') {" ^
+    "        Write-Output 'ERROR: SysMain is not running after MMAgent configuration.';" ^
+    "        $criticalFailure = $true;" ^
+    "    };" ^
     "    if (-not $final.MemoryCompression) {" ^
     "        Write-Output 'ERROR: Memory compression is not enabled in the final MMAgent state.';" ^
     "        $criticalFailure = $true;" ^
     "    };" ^
+    "    if (-not $final.PageCombining) {" ^
+    "        Write-Output 'ERROR: Page combining is not enabled in the final MMAgent state.';" ^
+    "        $criticalFailure = $true;" ^
+    "    };" ^
     "} catch {" ^
-    "    Write-Output ('ERROR: Final MMAgent state could not be verified: ' + $_.Exception.Message);" ^
+    "    Write-Output ('ERROR: Final SysMain or MMAgent state could not be verified: ' + $_.Exception.Message);" ^
     "    $criticalFailure = $true;" ^
     "};" ^
-    "if ($changed) {" ^
-    "    Write-Output 'NOTICE: One or more MMAgent changes may require a restart before becoming fully effective.';" ^
-    "};" ^
     "if ($optionalFailure) {" ^
-    "    Write-Output 'NOTICE: One or more optional MMAgent features were unsupported and were left unchanged.';" ^
+    "    Write-Output 'NOTICE: One optional MMAgent setting was unsupported and was left unchanged.';" ^
     "};" ^
+    "Write-Output 'NOTICE: A restart is required to validate the persistent SysMain and MMAgent state.';" ^
     "if ($criticalFailure) { exit 1 } else { exit 0 }" ^
     >>"%LOGFILE%" 2>&1
 
 set "MemoryFeaturesRC=!ERRORLEVEL!"
 
 if not "!MemoryFeaturesRC!"=="0" (
-    call :LOG WARNING: Required MMAgent memory-feature configuration or verification failed.
+    call :LOG WARNING: Low-memory SysMain or MMAgent configuration failed.
     exit /b 1
 )
-call :LOG MMAgent memory-feature configuration completed.
+
+call :LOG Low-memory SysMain and MMAgent configuration completed.
 exit /b 0
 
 :: Capture a Windows memory snapshot and write it to the console and logfile.
@@ -1780,13 +1863,93 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds
 set "DelayRC=%ERRORLEVEL%"
 endlocal & exit /b %DelayRC%
 
+:NonInteractiveSequence
+::allows multiple run types to be done in sequence with a single command line
+set "TBOK_NONINTERACTIVE=1"
+set "TBOK_SEQUENCE_ACTIVE=1"
+set "TBOK_SEQUENCE_FAILED=0"
+
+call :LOG ================================================================
+call :LOG Starting requested noninteractive operation sequence
+call :LOG ================================================================
+
+if defined TBOK_RUN_OPTIMIZE (
+    call :LOG Sequence operation: System and user optimizations
+    call :SYSTEMTWEAKS
+    set "TBOK_OPERATION_RC=!ERRORLEVEL!"
+
+    if not "!TBOK_OPERATION_RC!"=="0" (
+        call :LOG ERROR: System and user optimizations returned exit code !TBOK_OPERATION_RC!.
+        set "TBOK_SEQUENCE_FAILED=1"
+    ) else (
+        call :LOG Sequence operation completed: System and user optimizations
+    )
+)
+
+if defined TBOK_RUN_CLEANUP (
+    call :LOG Sequence operation: BeardSweeper cleanup
+    call :BeardSweeper
+    set "TBOK_OPERATION_RC=!ERRORLEVEL!"
+
+    if not "!TBOK_OPERATION_RC!"=="0" (
+        call :LOG ERROR: BeardSweeper cleanup returned exit code !TBOK_OPERATION_RC!.
+        set "TBOK_SEQUENCE_FAILED=1"
+    ) else (
+        call :LOG Sequence operation completed: BeardSweeper cleanup
+    )
+)
+
+if defined TBOK_RUN_GAMING (
+    call :LOG Sequence operation: Gaming optimizations
+    call :GamingTweaks
+    set "TBOK_OPERATION_RC=!ERRORLEVEL!"
+
+    if not "!TBOK_OPERATION_RC!"=="0" (
+        call :LOG ERROR: Gaming optimizations returned exit code !TBOK_OPERATION_RC!.
+        set "TBOK_SEQUENCE_FAILED=1"
+    ) else (
+        call :LOG Sequence operation completed: Gaming optimizations
+    )
+)
+
+if defined TBOK_RUN_WINGET (
+    call :LOG Sequence operation: WinGet application updates
+    call :WinGet
+    set "TBOK_OPERATION_RC=!ERRORLEVEL!"
+
+    if not "!TBOK_OPERATION_RC!"=="0" (
+        call :LOG ERROR: WinGet application updates returned exit code !TBOK_OPERATION_RC!.
+        set "TBOK_SEQUENCE_FAILED=1"
+    ) else (
+        call :LOG Sequence operation completed: WinGet application updates
+    )
+)
+
+call :LOG ================================================================
+if "!TBOK_SEQUENCE_FAILED!"=="1" (
+    call :LOG WARNING: The requested operation sequence completed with one or more failures.
+) else (
+    call :LOG Requested operation sequence completed successfully.
+)
+call :LOG ================================================================
+
+set "TBOK_OPERATION_RC="
+set "TBOK_SEQUENCE_ACTIVE="
+set "TBOK_RUN_OPTIMIZE="
+set "TBOK_RUN_CLEANUP="
+set "TBOK_RUN_GAMING="
+set "TBOK_RUN_WINGET="
+set "TBOK_RUN_EXIT="
+set "TBOK_ARGUMENT_ERROR="
+goto :Finished
+
 :END-SCRIPT-HELPERS
 
 :MENU
 TITLE TBOK Windows Performance Optimizer Version %version% %verdate%
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
 ECHO Script now supports arguments for non-interactive sessions
-ECHO "run with /optimize /cleanup /gaming /winget for a menuless run"
+ECHO "run with /optimize /cleanup /gaming /winget /restart /newlog  for a menuless run"
 ECHO ============================================================
 ECHO                  THE BEARD OF KNOWLEDGE
 ECHO.
@@ -1819,13 +1982,27 @@ set "MenuChoiceRC=%ERRORLEVEL%"
 if "%MenuChoiceRC%"=="255" (
     call :LOG NOTICE: Interactive console input is unavailable.
     call :LOG NOTICE: Defaulting to menu option 1 - System and user improvements.
-    goto :SYSTEMTWEAKS
+    call :SYSTEMTWEAKS
+    goto :Finished
 )
 if "%MenuChoiceRC%"=="5" goto :EXIT
-if "%MenuChoiceRC%"=="4" goto :WinGet
-if "%MenuChoiceRC%"=="3" goto :GamingTweaks
-if "%MenuChoiceRC%"=="2" goto :BeardSweeper
-if "%MenuChoiceRC%"=="1" goto :SYSTEMTWEAKS
+
+if "%MenuChoiceRC%"=="4" (
+    call :WinGet
+    goto :Finished
+)
+if "%MenuChoiceRC%"=="3" (
+    call :GamingTweaks
+    goto :Finished
+)
+if "%MenuChoiceRC%"=="2" (
+    call :BeardSweeper
+    goto :Finished
+)
+if "%MenuChoiceRC%"=="1" (
+    call :SYSTEMTWEAKS
+    goto :Finished
+)
 
 call :LOG ERROR: Unexpected menu return code: %MenuChoiceRC%.
 goto :EXIT
@@ -1868,15 +2045,23 @@ if not "!StartupAuditRC!"=="0" (
 )
 call :RequireRollbackProtection "System and user optimization changes"
 if errorlevel 1 (
-    goto :EXIT
+    call :LOG ERROR: System and user optimizations were canceled because complete rollback protection could not be created.
+    exit /b 1
 )
 
 :MemoryUseOptimization
-call :ConfigureMemoryFeatures
-set "MemoryFeaturesRC=!ERRORLEVEL!"
+call :ResolveMemoryPolicy
+set "MemoryPolicyRC=!ERRORLEVEL!"
 
-if not "!MemoryFeaturesRC!"=="0" (
-    call :LOG WARNING: One or more MMAgent memory settings could not be verified or configured.
+if not "!MemoryPolicyRC!"=="0" (
+    call :LOG WARNING: The SysMain and MMAgent policy could not be resolved.
+) else (
+    call :ConfigureMemoryFeatures
+    set "MemoryFeaturesRC=!ERRORLEVEL!"
+
+    if not "!MemoryFeaturesRC!"=="0" (
+        call :LOG WARNING: One or more MMAgent memory settings could not be verified or configured.
+    )
 )
 
 call :LOG Resolving Current, Default, and LastKnownGood control-set mappings...
@@ -1884,8 +2069,8 @@ call :InitializeControlSetTargets
 set "ControlSetMappingRC=!ERRORLEVEL!"
 if not "!ControlSetMappingRC!"=="0" (
     call :LOG CRITICAL: Control-set role mappings could not be determined.
-    call :LOG Control-set-specific registry changes will not be applied.
-    goto :EXIT
+    call :LOG System and user optimizations were stopped before control-set-specific changes were applied.
+    exit /b 1
 )
 
 ECHO.
@@ -2149,7 +2334,6 @@ if not defined SvcHostThresholdKB (
     goto :SvcHostThresholdComplete
 )
 call :SetAllControlSetValues "Control" "SvcHostSplitThresholdInKB" "REG_DWORD" "!SvcHostThresholdKB!" "SvcHostSplitThresholdInKB"
-
 :svcHostThresholdComplete
 
 :windowsservicedisable
@@ -2171,47 +2355,29 @@ call :SetServiceStartup DiagTrack disabled
 call :SetServiceStartup UevAgentService disabled
 call :SetServiceStartup ssh-agent disabled
 
-call :LOG Setting sysmain service mode based on RAM and System Disk type
-::sysmain was developed to have the system load commonly used items from mechanical drives into ram for speed
-::sysmain runs on second boot after install and uses about 70-mb ram as a constant process 
-::Findings - sysmain should be disabled on systems with < 12GB ram
-::However - it benefits mechanical hard drive systems with > 12Gb RAM
-::Storage behind a RAID controller sometimes does not report media or bus type information
-::For RAID storage I leave the sysmain service on demand mode as a precaution.
-::using logic to properly detect what would work better for this specific system is the best approach
-set "MemoryGB="
-set "DriveDetectError="
-set "DriveDetectFile="
-
-set "MemoryGB=!TBOK_MEMORY_GB!"
-if not defined MemoryGB (
-    call :LOG WARNING: Unable to determine installed memory. Leaving SysMain unchanged.
-    goto :windowsservicedemand
-)
-call :LOG Memory: !MemoryGB! GB
-
-::For RAID volumes this script leave the sysmain service state unchanged
-::This is because I couldnt find a reliable method of detection since some raid controllers hide all info
-set "DriveType=!TBOK_DRIVETYPE!"
-call :LOG Using cached hardware profile storage result.
+call :LOG Applying the resolved SysMain and MMAgent service policy
+:: TBOK low-memory policy:
+:: Systems with 12 GB or less RAM keep SysMain Automatic and running so
+:: Memory Compression, Page Combining, and the MMAgent workers remain available.
+:: Higher-memory SSD systems disable SysMain.
+:: Higher-memory HDD systems set SysMain to Demand.
+:: Higher-memory systems with unknown storage leave SysMain unchanged.
+call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
-if /i "!DriveType!"=="HDD" (
-    if !MemoryGB! GEQ 12 (
-        call :LOG Rotational HDD with >=12GB RAM detected.
-        call :LOG Setting SysMain to start on demand...
-        call :SetServiceStartup SysMain demand
-    ) else (
-        call :LOG Rotational HDD with <12GB RAM detected.
-        call :LOG Disabling SysMain...
-        call :SetServiceStartup SysMain disabled
-    )
-) else if /i "!DriveType!"=="SSD" (
-    call :LOG Non-rotational storage detected, including SSD or NVMe.
-    call :LOG Disabling SysMain...
+call :LOG Low-memory profile: !TBOK_LOW_MEMORY!
+call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
+
+if /I "!TBOK_SYSMAIN_MODE!"=="auto" (
+    call :LOG Keeping SysMain Automatic so low-memory MMAgent features remain available.
+    call :SetServiceStartup SysMain auto
+) else if /I "!TBOK_SYSMAIN_MODE!"=="disabled" (
+    call :LOG Disabling SysMain on this higher-memory SSD system.
     call :SetServiceStartup SysMain disabled
+) else if /I "!TBOK_SYSMAIN_MODE!"=="demand" (
+    call :LOG Setting SysMain to start on demand on this higher-memory HDD system.
+    call :SetServiceStartup SysMain demand
 ) else (
-    call :LOG Unable to determine drive type. Leaving SysMain unchanged.
-	call :LOG If you have 12GB of RAM OR MORE but SSD behind a RAID you can manually disable the sysmain service
+    call :LOG SysMain and MMAgent were left unchanged because no reliable target mode was resolved.
 )
 ECHO.
 call :LOG Done with services to disable
@@ -3238,10 +3404,9 @@ if exist "%SystemDrive%\Users\Default\NTUSER.DAT" (
 :: ===========================================
 :: APPLY REGISTRY SETTINGS TO ALL USERS-END
 :: ===========================================
-call :Log ===== COMPLETE =====
-call :LOG Done. Log file: %LOGFILE%
-
-goto :Finished
+call :LOG ===== SYSTEM AND USER OPTIMIZATIONS COMPLETE =====
+call :LOG System and user optimization log: %LOGFILE%
+exit /b 0
 ::======================================END FOR EACH USER REGISTRY LOOP==========================================
 
 :GamingTweaks
@@ -3256,7 +3421,8 @@ call :LOG
 
 call :RequireRollbackProtection "Gaming optimization changes"
 if errorlevel 1 (
-    goto :EXIT
+    call :LOG ERROR: Gaming optimizations were canceled because complete rollback protection could not be created.
+    exit /b 1
 )
 
 call :LOG Resolving Current, Default, and LastKnownGood control-set mappings for gaming changes...
@@ -3265,8 +3431,8 @@ set "ControlSetMappingRC=!ERRORLEVEL!"
 
 if not "!ControlSetMappingRC!"=="0" (
     call :LOG CRITICAL: Control-set role mappings could not be determined.
-    call :LOG Gaming control-set changes will not be applied.
-    goto :EXIT
+    call :LOG Gaming optimizations were stopped before control-set-specific changes were applied.
+    exit /b 1
 )
 
 call :LOG Reset and Redetect Windows HPET dependency -High Precision Event Timer- - fixes issue where HPET was not detected properly
@@ -3313,6 +3479,18 @@ goto unknownchassisgaming
 
 :laptopgaming
 call :LOG Laptop detected - desktop-only power tweaks were skipped.
+Call :LOG Unlocking all hidden Power Plan attributes
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+" (gci 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse).Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' |" ^
+" % { sp $_.Replace('HKEY_LOCAL_MACHINE','HKLM:') -Name 'Attributes' -Value 2 -Force }"
+
+Call :LOG Activating Processor Performance Boost Mode 3 for Efficient Agressive
+powercfg -attributes sub_processor perfboostmode -attrib_hide
+powercfg -q scheme_current sub_processor perfboostmode
+powercfg -s scheme_current
+powercfg -setdcvalueindex scheme_current sub_processor perfboostmode 3
+powercfg -s scheme_current
+
 goto :GamingTweaksComplete
 
 :desktopgaming
@@ -3358,8 +3536,19 @@ if not defined ULTIMATE_GUID (
         call :LOG Ultimate Performance plan activated: !ULTIMATE_GUID!
     )
 )
+Call :LOG Activating Processor Performance Boost Mode 2 for Aggressive at Guaranteed
+powercfg -attributes sub_processor perfboostmode -attrib_hide
+powercfg -q scheme_current sub_processor perfboostmode
+powercfg -s scheme_current
+powercfg -setdcvalueindex scheme_current sub_processor perfboostmode 2
+powercfg -s scheme_current
 
+Call :LOG Unlocking all hidden Power Plan attributes
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+" (gci 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse).Name -notmatch '\bDefaultPowerSchemeValues|(\[0-9\]|\b255)$' |" ^
+" % { sp $_.Replace('HKEY_LOCAL_MACHINE','HKLM:') -Name 'Attributes' -Value 2 -Force }"
 set "ULTIMATE_GUID="
+
 goto :GamingTweaksComplete
 
 :unknownchassisgaming
@@ -3367,11 +3556,11 @@ call :LOG Unable to determine chassis type. Desktop-only power tweaks were skipp
 goto :GamingTweaksComplete
 
 :GamingTweaksComplete
-call :LOG ********************************************************************************
+call :LOG ****************************************************************
 call :LOG Completed Gaming Improvements
-call :LOG ********************************************************************************
+call :LOG ****************************************************************
 call :LOG
-goto :Finished
+exit /b 0
 
 :WinGet
 call :LOG CAUTION - WINGET DOES NOT CONTROL PACKAGES WITH REBOOT AUTO ENABLED
@@ -3379,18 +3568,143 @@ call :LOG CAUTION - RUNNING THIS ON A REMOTE MACHINE COULD REBOOT THE PC AS PART
 call :LOG CAUTION - IT IS DEFAULTED TO NOT REBOOT BUT SOME PACKAGES IGNORE THE REQUEST
 call :LOG CAUTION - MICROSOFT IS "WORKING TO RESOLVE THIS WITH 3RD PARTY PACKAGE MANAGERS"
 ECHO.
-call :LOG Installing or Updating to latest version of the WinGet Package manager
-powershell.exe -c Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
-PowerShell.exe -c Install-Module -Name Microsoft.WinGet.Client -Force
+call :LOG Installing or updating the WinGet Package Manager prerequisites
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop" >>"%LOGFILE%" 2>&1
+set "WinGetProviderRC=!ERRORLEVEL!"
+if not "!WinGetProviderRC!"=="0" (
+    call :LOG ERROR: NuGet package-provider installation or verification failed. Exit code: !WinGetProviderRC!.
+    exit /b 1
+)
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Install-Module -Name Microsoft.WinGet.Client -Force -ErrorAction Stop" >>"%LOGFILE%" 2>&1
+set "WinGetModuleRC=!ERRORLEVEL!"
+if not "!WinGetModuleRC!"=="0" (
+    call :LOG ERROR: Microsoft.WinGet.Client installation or update failed. Exit code: !WinGetModuleRC!.
+    exit /b 1
+)
+
 call :LOG Searching for and updating existing installed packages
-winget update --all --include-unknown --accept-source-agreements --accept-package-agreements --silent --verbose
-if defined TBOK_NONINTERACTIVE goto :EXIT
-goto :MENU
+
+winget.exe update --all --include-unknown --accept-source-agreements --accept-package-agreements --silent --verbose >>"%LOGFILE%" 2>&1
+set "WinGetUpdateRC=!ERRORLEVEL!"
+if not "!WinGetUpdateRC!"=="0" (
+    call :LOG WARNING: WinGet completed with exit code !WinGetUpdateRC!.
+    exit /b 1
+)
+
+call :LOG WinGet application updates completed successfully.
+exit /b 0
 
 :BeardSweeper
-call :LOG BeardSweeper integration is Currently In development - will be released soon, but you can get it on github in "scripts from my videos"
-if defined TBOK_NONINTERACTIVE goto :EXIT
-goto :MENU
+call :LOG BeardSweeper integration is currently in development - only safe non-destructive options have been added.
+call :LOG Configuring and Running Enhanced DiskCleanup routine
+:CLEANMGR
+	ECHO Maximizing Disk Cleanup registry settings for all safe to delete content
+
+:: Set all the CLEANMGR registry entries for Group #69 -have a sense of humor!
+	SET "_Group_No=StateFlags0069"	
+	SET "_RootKey=HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
+
+:: Temporary Setup Files
+	REG ADD "%_RootKey%\Active Setup Temp Folders" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Branch Cache (WAN bandwidth optimization)
+	REG ADD "%_RootKey%\BranchCache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Catalog Files for the Content Indexer (deletes all files in the folder c:\catalog.wci)
+	REG ADD "%_RootKey%\Content Indexer Cleaner" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Delivery Optimization Files (service to share bandwidth for uploading Windows updates)
+	REG ADD "%_RootKey%\Delivery Optimization Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Diagnostic data viewer database files (Windows app that sends data to Microsoft)
+	REG ADD "%_RootKey%\Diagnostic Data Viewer database Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Direct X Shader cache (graphics cache, clearing this can can speed up application load time.)
+	REG ADD "%_RootKey%\D3D Shader Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Downloaded Program Files (ActiveX controls and Java applets downloaded from the Internet)
+	REG ADD "%_RootKey%\Downloaded Program Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Temporary Internet Files
+	REG ADD "%_RootKey%\Internet Cache Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Language resources Files (unused languages and keyboard layouts)
+	REG ADD "%_RootKey%\Language Pack" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Offline Files (Web pages)
+	REG ADD "%_RootKey%\Offline Pages Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Old ChkDsk Files
+	REG ADD "%_RootKey%\Old ChkDsk Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Recycle Bin -If you store stuff in recycle bin... shame on you!
+	REG ADD "%_RootKey%\Recycle Bin" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Retail Demo
+	REG ADD "%_RootKey%\RetailDemo Offline Content" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Update package Backup Files (old versions)
+	REG ADD "%_RootKey%\ServicePack Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Setup Log files (software install logs)
+	REG ADD "%_RootKey%\Setup Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: System Error memory dump files (These can be very large if the system has crashed)
+	REG ADD "%_RootKey%\System error memory dump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: System Error minidump files (smaller memory crash dumps)
+	REG ADD "%_RootKey%\System error minidump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Temporary Files (%Windir%\Temp and %Windir%\Logs)
+	REG ADD "%_RootKey%\Temporary Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Windows Update Cleanup (old system files not migrated during a Windows Upgrade)
+	REG ADD "%_RootKey%\Update Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Thumbnails (Explorer will recreate thumbnails as each folder is viewed.)
+	REG ADD "%_RootKey%\Thumbnail Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+
+:: Windows Defender Antivirus
+	REG ADD "%_RootKey%\Windows Defender" /v %_Group_No% /d 2 /t REG_DWORD /f	>nul 2>&1
+
+:: Windows error reports and feedback diagnostics
+	REG ADD "%_RootKey%\Windows Error Reporting Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f 	>nul 2>&1
+
+:: Windows Upgrade log files
+	REG ADD "%_RootKey%\Windows Upgrade Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+call :LOG Disk Cleanup registry settings completed.
+call :LOG Running Windows Disk Cleanup. This can take a while.
+
+start "" /wait cleanmgr.exe /sagerun:69 >>"%LOGFILE%" 2>&1
+set "CleanMgrRC=!ERRORLEVEL!"
+
+if not "!CleanMgrRC!"=="0" (
+    call :LOG WARNING: Disk Cleanup returned exit code !CleanMgrRC!.
+) else (
+    call :LOG Disk Cleanup completed successfully.
+)
+
+call :LOG Cleaning superseded Windows component-store versions.
+
+DISM.exe /Online /Cleanup-Image /StartComponentCleanup >>"%LOGFILE%" 2>&1
+set "ComponentCleanupRC=!ERRORLEVEL!"
+
+if not "!ComponentCleanupRC!"=="0" (
+    call :LOG WARNING: Component-store cleanup returned exit code !ComponentCleanupRC!.
+) else (
+    call :LOG Component-store cleanup completed successfully.
+)
+
+set "_Group_No="
+set "_RootKey="
+
+if not "!CleanMgrRC!"=="0" exit /b 1
+if not "!ComponentCleanupRC!"=="0" exit /b 1
+
+call :LOG BeardSweeper cleanup completed successfully.
+exit /b 0
+exit /b 0
 
 :Finished
 call :LOG ****************************ALL FINISHED!******************************
@@ -3401,6 +3715,11 @@ call :LOG .
 call :LOG ****************************ALL FINISHED!******************************
 
 if defined TBOK_NONINTERACTIVE (
+    if defined TBOK_RUN_RESTART (
+        call :LOG Noninteractive execution completed.
+        call :LOG /RESTART specified. The computer will now restart.
+        goto :RESTART
+    )
     call :LOG Noninteractive execution detected. The computer will not restart automatically.
     call :LOG Restart the computer manually when appropriate.
     goto :EXIT
