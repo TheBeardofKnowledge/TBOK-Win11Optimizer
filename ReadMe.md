@@ -128,9 +128,71 @@ So what does it do?
    7. Desktop - Enable Ultimate Performance Power Plan
 
 10. WinGet automatic software updater
-11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts.
-   
-   MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
+11. Ultimate Disk Cleanup with BeardSweeper - High-impact disk cleanup combining Windows Component-Store (`DISM /Online /Cleanup-Image /StartComponentCleanup`) and Windows Disk Cleanup (`cleanmgr.exe /sagerun:69`).
+
+---
+
+## How to Run
+
+### 1. Interactive Menu
+Right-click `NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat` and select **Run as Administrator**.
+* Select `1`: Apply system and user level improvements (default after 15s timeout).
+* Select `2`: Run BeardSweeper Ultimate Disk and Cache Cleanup routine.
+* Select `3`: Apply gaming tweaks (desktops only).
+* Select `4`: Update all installed apps via WinGet.
+* Select `5`: Exit.
+
+### 2. Command-Line Arguments (Menuless / Unattended Runs)
+You can run specific routines directly from an elevated Command Prompt or PowerShell:
+```cmd
+:: Run only the BeardSweeper disk cleanup routine (reclaims up to 10-30+ GB)
+NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat /cleanup
+
+:: Run full system and user-level optimization
+NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat /optimize
+
+:: Apply only gaming tweaks
+NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat /gaming
+
+:: Run software updates using WinGet
+NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat /winget
+
+:: Chain operations with a fresh log and reboot
+NEWpre-release_canditate_TBOKwinOptimizer-V1-6-9.bat /optimize /cleanup /newlog /restart
+```
+
+---
+
+## Automated Monthly Scheduled Cleanup
+
+For recurring maintenance, you can deploy the standalone PowerShell cleanup script [`BeardSweeper-ScheduledCleanup.ps1`](./BeardSweeper-ScheduledCleanup.ps1):
+
+```powershell
+# 1. Run immediate cleanup (Windows Disk Cleanup + DISM + Dev/AI caches)
+.\BeardSweeper-ScheduledCleanup.ps1
+
+# 2. Register a recurring monthly Windows Scheduled Task (runs on 1st of every month at 9:00 AM)
+.\BeardSweeper-ScheduledCleanup.ps1 -InstallTask
+
+# 3. Remove the scheduled task if no longer needed
+.\BeardSweeper-ScheduledCleanup.ps1 -UninstallTask
+```
+
+### Developer & AI Tool Cache Cleaning
+The scheduled script also targets high-bloat developer and AI assistant caches:
+* **NPM Cache** (`AppData\Local\npm-cache`): Often accumulates 10–20+ GB of stale tarballs.
+* **Python Pip Cache** (`AppData\Local\pip\cache`): Purges cached wheels.
+* **Codex Worktrees** (`.codex\worktrees`): Cleans finished background sandbox repositories.
+* **User Temp** (`AppData\Local\Temp`): Purges transient application cache files.
+
+---
+
+## Enterprise / Fleet Deployments (Microsoft Intune)
+For IT admins looking to deploy a conservative, non-interactive subset across fleet workstations via Intune Proactive Remediations without forced reboots, see the [`Intune/`](./Intune) folder:
+* [`Intune/README.md`](./Intune/README.md)
+* [`Intune/Detection.ps1`](./Intune/Detection.ps1)
+* [`Intune/Remediation.ps1`](./Intune/Remediation.ps1)
+
 
 
 

@@ -1,0 +1,10 @@
+# TBOK execution logs and temporary plans
+*.log
+TBOKwinOptimizer-*.log
+TBOK-*.txt
+*.tmp
+
+# Windows system files
+Thumbs.db
+Desktop.ini
+.DS_Store
