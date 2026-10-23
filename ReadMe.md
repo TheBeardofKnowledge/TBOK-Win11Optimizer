@@ -1,15 +1,15 @@
-IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
-https://buymeacoffee.com/thebeardofl
+A Business ready comprehensive Windows Performance Optimization batch script designed to debloat Windows, improve system responsiveness, enhance gaming performance, and increase user privacy.
+
+ALL WITHOUT BREAKING A SINGLE FEATURE WE ACTUALLY USE!
 
 Yes... It's here, it works, and best of all; it's majority based on and verified by Microsoft documentation at learn.microsoft.com
 
-Literally the safest and most comprehensive optimization & debloat tool out there (that I know of).
+The easiest,safest, and most comprehensive optimization & debloat tool out there (that I know of) that uses hardware aware decision making to apply improvements.
 
-An easy to use, business approved, 1-click Windows 11 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
+An easy to use, business approved, 1-click Windows 11 and Windows 10 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
 ... and it's already getting improvements thanks to your testing and feedback.
-Yes, this also works on windows 10, yes this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored.
+Yes, this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored, but ~80% is still aplicable.
 
-Call this a "Make Windows perform the way it should" script, but I'll likely change it to something more catchy.
 
 If you haven't noticed, Windows 11 is not fully optimized, in fact, it's very unnecessarily bloated.  We're not talking about special use cases here, we're talking about day to day use.
 What took 1 second in Windows 10 now takes 4 seconds in windows 11.  Multiply that by how many actions you run on a PC and you're talking about A LOT of wasted time. 
@@ -132,6 +132,9 @@ So what does it do?
 11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts. Pending full implementation.
    
    MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
+
+   IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
+   https://buymeacoffee.com/thebeardofl
 
 
 
