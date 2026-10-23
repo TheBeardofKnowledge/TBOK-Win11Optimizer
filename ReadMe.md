@@ -43,7 +43,7 @@ So what does it do?
 3. Properly configures virtual memory settings to avoid lag from expansion
 4. Services:
    1. Disables a few unnecessary services from startup
-   2. Configures the sysmain service based on your hardware (ram/storage)
+   2. Configures the sysmain and MMAgent services based on your hardware (ram/storage)
    3. Ensures services that don't have to autorun on startup are set to demand startup
    4. Ensures required windows services are set to automatic startup
    5. Configures less essential services to delayed startup
@@ -56,7 +56,7 @@ So what does it do?
    5. Enables long file system paths (why is this not defaulted ON Microsoft?)
    6. Disables "Companion software" recommendations for hardware
    7. Disables Webview mode from Windows Search, returning classic search
-   8. Disables known Telemitry Data Collection
+   8. Disables known Telemetry Data Collection
    9. Disables the Windows OOBE Privacy Settings Experience prompt for new users.
    10. Disables the WPBT feature that allows vendors to execute programs at boot
    11. Fixes the Network Data Usage Graph not working
@@ -66,20 +66,20 @@ So what does it do?
    15. Enables verbose logon and logoff messages so you can know what your system is doing
 
 6. Bloat Removal
-   1. Removes MS Co-Pilot standard version systemwide and disables auto reinstall/enable
+   1. Removes MS Co-Pilot standard version (not m365 co-pilot) systemwide for all users and disables auto reinstall/enable
    2. Removes Bing Search systemwide
    3. Removes Taskbar Widgets that load a full web browser in RAM even if you don't use it
    4. Removes the WebExperienceHost package that MS uses to push content
    5. Disables Various Wasteful scheduled tasks that autorun even without consent
 
-7. User Level Registry Improvements (applied to all users, including default profile)
+7. User Level Registry Improvements (applied to all users, including default profile) (sysprep)
    This is what most optimization and debloat utilities get wrong - they only apply it to the current user, when MS clearly made bloat & data collection per user.
    1. Disables custom folder view that causes lag for explorer startup
    2. Sets "This PC" as the default explorer view
    3. Disable allow apps to run in the background (even when closed)
    4. Force Auto Enable Game Mode which helps reduce background apps
    5. Enable right-click "End Task" feature from taskbar
-   6. Restore Full Context menu right-click menu
+   6. Restore Full classic Context menu right-click menu
    7. Disable web search in start menu search
    8. Allow pinning more apps in the start menu
    9. Speed up "show menu" delay for classic apps
@@ -97,7 +97,7 @@ So what does it do?
       10. Disable home screen ads
       11. Disable Timeline Suggestions ads
       12. Disable Windows Content Delivery
-      13. Disable automatic enabling of OEM and Preinstalled apps
+      13. Disable automatic enabling of OEM and Preinstalled apps (LG monitor McAfee ad incident)
       14. Disable Diagnostic Feedback frequency and "Tailored Experiences"
       15. Disable the Windows Feeds as policy or standard
       16. Disable the Start Menu ads
@@ -126,9 +126,10 @@ So what does it do?
    5. Set improved MMCS values for Windowed Games and Audio Apps
    6. Desktop - Disable Power Throttling and Lazy Mode
    7. Desktop - Enable Ultimate Performance Power Plan
+   8. Set processor ramp up to aggressive at guaranteed for desktops and (race to idle) and efficient aggressive for laptops.
 
 10. WinGet automatic software updater
-11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts.
+11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts. Pending full implementation.
    
    MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
 
