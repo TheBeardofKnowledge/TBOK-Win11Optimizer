@@ -1,4 +1,4 @@
-A Business ready comprehensive Windows Performance Optimization batch script designed to debloat Windows, improve system responsiveness, enhance graphics performance, and increase user privacy.
+A Business ready comprehensive Windows Performance Optimization batch script designed to debloat Windows, improve system responsiveness, improve gaming/workstation performance, and increase user privacy.
 
 ALL WITHOUT BREAKING A SINGLE FEATURE WE ACTUALLY USE!
 
