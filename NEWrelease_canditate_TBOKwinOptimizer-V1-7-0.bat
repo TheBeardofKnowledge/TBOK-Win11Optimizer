@@ -21,6 +21,18 @@
 :: /winget - full auto software update using WinGet
 :: /newlog - starts a new log file for the workstation being run on, if not it will reuse existing
 :: /restart - restarts the computer after all requested noninteractive operations complete
+:: /remote COMPUTERNAME - copies TBOK to the remote workstation and executes the requested
+::  noninteractive operations there, retrieves logs to the local script directory,
+::  and processes /RESTART only after artifact retrieval completes
+:: /remotelist FILE - sequentially runs the requested operations on each
+:: computer listed in FILE. One computer name per line. Blank lines and
+:: lines beginning with # are ignored.
+:: Example:
+:: TBOKwinOptimizer-V1-7-0.bat /OPTIMIZE /RESTART /REMOTELIST computers.txt
+::   Requirements for /remote and /Remotelist: 
+::   The destination must accept WS-Management remoting connections
+::   The source computer account must have administrative rights on the remote computer
+
 
 ::turn off echoing all commands
 @ECHO OFF
@@ -30,13 +42,40 @@ color f0
 ::enable holding variables during script,explicitely enable command extensions, disable variable expansions
 setlocal EnableExtensions DisableDelayedExpansion
 
+::add ANSI color support
+for /f %%A in ('echo prompt $E^| cmd') do set "ESC=%%A"
+::resets color to black background white text
+set "CLR_RESET=%ESC%[30;107m"
+
+set "CLR_TITLE=%ESC%[34m"
+::Black
+set "CLR_MENU=%ESC%[30m"
+::Blue
+set "CLR_OPTION=%ESC%[34m"
+::Green
+set "CLR_INFO=%ESC%[32m"
+::Red
+set "CLR_WARN=%ESC%[31m"
+::Purple
+set "CLR_STATUS=%ESC%[35m"
+
+::individual colors
+set "CLR_RED=%ESC%[91m"
+set "CLR_GREEN=%ESC%[92m"
+set "CLR_YELLOW=%ESC%[93m"
+set "CLR_BLUE=%ESC%[94m"
+set "CLR_CYAN=%ESC%[96m"
+set "CLR_WHITE=%ESC%[97m"
+
+
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.6.9"
-set "VERDATE=10-16-2026"
+set "VERSION=1.7.0"
+set "VERDATE=10-23-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
+cls
 echo No changes are being made at this time.
 
 "%SystemRoot%\System32\fltmc.exe" >nul 2>&1
@@ -80,12 +119,30 @@ exit /b 0
 
 :GotPrivileges
 ECHO Script elevated successfully
-cls
-
+ECHO Analyzing System to create optimized plan, please wait...
 :BEGIN-SCRIPT-HELPERS
 ::These are items that are called later in the script to perform a function - trims the code size for repeat items
 ::enable extended script logic and delayed expansion
-setlocal enableextensions EnableDelayedExpansion
+setlocal EnableExtensions EnableDelayedExpansion
+
+call :DetectRemoteRequest %*
+set "RemoteDetectionRC=!ERRORLEVEL!"
+if not "!RemoteDetectionRC!"=="0" (
+    echo ERROR: The remote-execution request is invalid.
+    exit /b !RemoteDetectionRC!
+)
+
+if defined TBOK_REMOTE_LIST_FILE (
+    call :RunRemoteList
+    set "RemoteExecutionRC=!ERRORLEVEL!"
+    exit /b !RemoteExecutionRC!
+)
+
+if defined TBOK_REMOTE_HOST (
+    call :RunRemoteController
+    set "RemoteExecutionRC=!ERRORLEVEL!"
+    exit /b !RemoteExecutionRC!
+)
 
 :LogFile
 :: Reuse newest logfile for this computer unless /NEWLOG was specified.
@@ -99,12 +156,18 @@ for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Com
 if not defined TBOK_TIMESTAMP (
     set "TBOK_TIMESTAMP=%RANDOM%-%RANDOM%"
 )
+set "TBOK_NEWLOG_REQUESTED=0"
 
+for %%A in (%*) do (
+    if /I "%%~A"=="/NEWLOG" (
+        set "TBOK_NEWLOG_REQUESTED=1"
+    )
+)
 set "TBOK_LOG_WAS_CREATED=0"
 set "LOGFILE="
 
 :: User explicitly requested a fresh logfile.
-if /I not "%~1"=="/NEWLOG" (
+if "!TBOK_NEWLOG_REQUESTED!"=="0" (
     for /f "usebackq delims=" %%L in (`
     dir /b /a-d /o-d "%~dp0TBOKwinOptimizer-%COMPUTERNAME%-*.log" 2^>nul
 `) do (
@@ -141,12 +204,24 @@ call :InitializeTemporaryPlans
 goto :Switches
 
 :Log
-::LOG and echo helper to avoid duplicate lines in script - Echoes on screen and also into logfile
-::usage call :LOG "message to echo"
+:: Echoes to the console and logfile.
+:: During profile-summary mode, routine messages are suppressed while
+:: ERROR and WARNING messages remain visible.
 setlocal DisableDelayedExpansion
 set "LogMessage=%*"
+set "LogMessageType=%LogMessage:~0,8%"
+
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    if /I not "%LogMessage:~0,6%"=="ERROR:" (
+        if /I not "%LogMessageType%"=="WARNING:" (
+            endlocal
+            exit /b 0
+        )
+    )
+)
 echo(%LogMessage%
 >>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
+
 endlocal
 exit /b 0
 
@@ -512,19 +587,26 @@ exit /b 1
 ::2 = Restore point failed and fallback protection is incomplete
 
 :RequireRollbackProtection
-:: helper to retain rollback return codes instead of verifying each time
+:: Return codes:
+:: 0 = Rollback protection is usable.
+:: 1 = Complete rollback protection could not be created.
 set "ProtectedOperation=%~1"
+set "RollbackRC="
+set "RollbackResult=1"
 
 if not defined ProtectedOperation (
     set "ProtectedOperation=Requested optimization"
 )
+
 if defined TBOK_ROLLBACK_ALREADY_VERIFIED (
     call :LOG Rollback protection was already verified during this session.
     call :LOG Reusing the existing restore-point and registry-backup state.
     exit /b 0
 )
+
 set "TBOK_BACKUPS_ALREADY_EXIST=0"
 set "TBOK_TODAY="
+set "TBOK_EXISTING_BACKUP_DIR="
 
 for /f "delims=" %%A in (
     'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd"'
@@ -532,37 +614,61 @@ for /f "delims=" %%A in (
     set "TBOK_TODAY=%%A"
 )
 
-for /d %%D in ("%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-*") do (
-    echo(%%~nxD | findstr /C:"!TBOK_TODAY!" >nul
-
-    if not errorlevel 1 (
-        set "TBOK_BACKUPS_ALREADY_EXIST=1"
+if defined TBOK_TODAY (
+    for /d %%D in ("%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TODAY!-*") do (
+        if exist "%%~fD\HKLM-Before-TBOK.reg" (
+            if exist "%%~fD\HKCU-ExecutionAccount-Before-TBOK.reg" (
+                set "TBOK_BACKUPS_ALREADY_EXIST=1"
+                set "TBOK_EXISTING_BACKUP_DIR=%%~fD"
+            )
+        )
     )
 )
 
 if "!TBOK_BACKUPS_ALREADY_EXIST!"=="1" (
-    call :LOG Rollback backup directory from today was already found.
-    call :LOG Skipping restore-point creation and registry-export generation.
+    call :LOG Complete rollback backup files from today were found.
+    call :LOG Backup directory: !TBOK_EXISTING_BACKUP_DIR!
+    call :LOG Skipping duplicate restore-point and registry-export generation.
+    set "TBOK_PROFILE_BACKUP_DIR=!TBOK_EXISTING_BACKUP_DIR!"
+    set "TBOK_RESTORE_POINT_FAILED=1"
     set "TBOK_ROLLBACK_ALREADY_VERIFIED=1"
-    exit /b 0
+    set "RollbackResult=0"
+    goto :RequireRollbackProtectionComplete
 )
 
 set "TBOK_BACKUPS_ALREADY_EXIST="
 set "TBOK_TODAY="
+set "TBOK_EXISTING_BACKUP_DIR="
+
 call :PrepareRollbackProtection
 set "RollbackRC=!ERRORLEVEL!"
+
 if "!RollbackRC!"=="0" (
+    call :LOG Restore-point rollback protection was created successfully.
     set "TBOK_ROLLBACK_ALREADY_VERIFIED=1"
-    exit /b 0
+    set "RollbackResult=0"
+    goto :RequireRollbackProtectionComplete
 )
+
 if "!RollbackRC!"=="1" (
-    call :LOG NOTICE: The restore point failed, but fallback registry exports were created.
+    call :LOG NOTICE: The restore point failed, but complete fallback registry exports were created.
     set "TBOK_ROLLBACK_ALREADY_VERIFIED=1"
-    exit /b 0
+    set "RollbackResult=0"
+    goto :RequireRollbackProtectionComplete
 )
+
 call :LOG CRITICAL: Complete rollback protection could not be created.
 call :LOG CRITICAL: !ProtectedOperation! will not be applied.
-exit /b 1
+set "RollbackResult=1"
+
+:RequireRollbackProtectionComplete
+set "ProtectedOperation="
+set "RollbackRC="
+set "TBOK_BACKUPS_ALREADY_EXIST="
+set "TBOK_TODAY="
+set "TBOK_EXISTING_BACKUP_DIR="
+
+exit /b !RollbackResult!
 
 :: Restore the original SystemRestorePointCreationFrequency value.
 :RestorePointFrequency
@@ -612,16 +718,29 @@ exit /b 0
 ::This line is called to modify a service startup mode
 :SetServiceStartup
 setlocal DisableDelayedExpansion
+
 set "TBOK_SERVICE=%~1"
 set "TBOK_STARTMODE=%~2"
+set "TBOK_STARTMODE_VALID=0"
 
 if not defined TBOK_SERVICE (
     endlocal
     call :LOG ERROR: SetServiceStartup called without a service name.
     exit /b 2
 )
-if /i not "%TBOK_STARTMODE%"=="auto" if /i not "%TBOK_STARTMODE%"=="delayed-auto" ^
-if /i not "%TBOK_STARTMODE%"=="demand" if /i not "%TBOK_STARTMODE%"=="disabled" (
+if /I "%TBOK_STARTMODE%"=="auto" (
+    set "TBOK_STARTMODE_VALID=1"
+)
+if /I "%TBOK_STARTMODE%"=="delayed-auto" (
+    set "TBOK_STARTMODE_VALID=1"
+)
+if /I "%TBOK_STARTMODE%"=="demand" (
+    set "TBOK_STARTMODE_VALID=1"
+)
+if /I "%TBOK_STARTMODE%"=="disabled" (
+    set "TBOK_STARTMODE_VALID=1"
+)
+if "%TBOK_STARTMODE_VALID%"=="0" (
     endlocal
     call :LOG ERROR: Invalid startup mode "%~2" for service "%~1".
     exit /b 2
@@ -631,7 +750,7 @@ if not defined TBOK_SERVICE_PLAN (
     call :LOG ERROR: Service startup plan file has not been initialized.
     exit /b 3
 )
-:: Store one request per line using a pipe delimiter.
+
 >>"%TBOK_SERVICE_PLAN%" echo(%TBOK_SERVICE%^|%TBOK_STARTMODE%
 
 if errorlevel 1 (
@@ -1288,87 +1407,134 @@ endlocal & exit /b %WriteRC%
 :: Uses REG QUERY and REG ADD only for faster machine-level registry processing.
 :: Equivalent hexadecimal and decimal DWORD representations may be reapplied.
 :SetRegistryValue
-setlocal EnableDelayedExpansion
+:: Queries and configures one named registry value.
+:: Outside profile-summary mode: Logs MATCH, CREATE, CHANGE, or ERROR.
+:: During profile-summary mode: Increments Applied, Skipped, or Failed counters.
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "RegPath=%~1"
 set "RegName=%~2"
 set "RegType=%~3"
 set "RegData=%~4"
 set "RegDescription=%~5"
-
-if not defined RegPath (
-    endlocal
-    call :LOG ERROR: SetRegistryValue was called without a registry path.
-    exit /b 2
-)
-if not defined RegName (
-    endlocal
-    call :LOG ERROR: SetRegistryValue was called without a value name.
-    exit /b 2
-)
-if not defined RegType (
-    endlocal
-    call :LOG ERROR: SetRegistryValue was called without a registry type.
-    exit /b 2
-)
-if not defined RegDescription (
-    set "RegDescription=!RegName!"
-)
 set "CurrentType="
 set "CurrentData="
+set "OriginalType="
+set "OriginalData="
+set "RegistryWriteRC="
 
-for /f "skip=2 tokens=1,2,*" %%A in (
-    'REG QUERY "!RegPath!" /v "!RegName!" 2^>nul'
-) do (
+if not defined RegPath goto :SetRegistryValue_InvalidPath
+if not defined RegName goto :SetRegistryValue_InvalidName
+if not defined RegType goto :SetRegistryValue_InvalidType
+
+if not defined RegDescription set "RegDescription=!RegName!"
+
+for /f "skip=2 tokens=1,2,*" %%A in ('REG QUERY "!RegPath!" /v "!RegName!" 2^>nul') do (
     set "CurrentType=%%B"
     set "CurrentData=%%C"
 )
-if defined CurrentType (
-    if /I "!CurrentType!"=="!RegType!" (
-        if /I "!CurrentData!"=="!RegData!" (
-            endlocal
-            call :LOG MATCH: %~5 already equals %~4 [%~3]. No changes were made.
-            exit /b 0
-        )
+
+if not defined CurrentType goto :SetRegistryValue_Create
+
+if /I "!CurrentType!"=="!RegType!" (
+    if /I "!CurrentData!"=="!RegData!" (
+        goto :SetRegistryValue_Match
     )
-
-    set "OriginalType=!CurrentType!"
-    set "OriginalData=!CurrentData!"
-    set "ChangeMode=CHANGE"
-) else (
-    set "OriginalType=Not present"
-    set "OriginalData=Not present"
-    set "ChangeMode=CREATE"
 )
-REG ADD "!RegPath!" ^
-    /v "!RegName!" ^
-    /t "!RegType!" ^
-    /d "!RegData!" ^
-    /f >>"%LOGFILE%" 2>&1
 
+set "OriginalType=!CurrentType!"
+set "OriginalData=!CurrentData!"
+goto :SetRegistryValue_WriteChange
+
+
+:SetRegistryValue_Create
+REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
 set "RegistryWriteRC=!ERRORLEVEL!"
 
-if not "!RegistryWriteRC!"=="0" (
-    for %%R in ("!RegistryWriteRC!") do (
-        endlocal
-        call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
-        exit /b 1
-    )
-)
+if not "!RegistryWriteRC!"=="0" goto :SetRegistryValue_Failed
+goto :SetRegistryValue_Created
 
 
-if /I "!ChangeMode!"=="CREATE" (
-    endlocal
-    call :LOG CREATE: %~5 was not present; created as %~4 [%~3].
-    exit /b 0
-)
-endlocal & call :LOG CHANGE: %~5 original value: %OriginalData% [%OriginalType%]; changed to: %~4 [%~3].
+:SetRegistryValue_WriteChange
+REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
+set "RegistryWriteRC=!ERRORLEVEL!"
+
+if not "!RegistryWriteRC!"=="0" goto :SetRegistryValue_Failed
+goto :SetRegistryValue_Changed
+
+
+:SetRegistryValue_Match
+if defined TBOK_PROFILE_SUMMARY_MODE goto :SetRegistryValue_SummarySkipped
+
+call :LOG MATCH: !RegDescription! already equals !RegData! [!RegType!]. No changes were made.
+endlocal
 exit /b 0
 
-:SetRegistryValueQuiet
-:: Adds a registry key with named value while handling error types to reduce code, console noise, and log
-setlocal DisableDelayedExpansion
 
+:SetRegistryValue_Created
+if defined TBOK_PROFILE_SUMMARY_MODE goto :SetRegistryValue_SummaryApplied
+
+call :LOG CREATE: !RegDescription! was not present; created as !RegData! [!RegType!].
+endlocal
+exit /b 0
+
+
+:SetRegistryValue_Changed
+if defined TBOK_PROFILE_SUMMARY_MODE goto :SetRegistryValue_SummaryApplied
+
+call :LOG CHANGE: !RegDescription! original value: !OriginalData! [!OriginalType!]; changed to: !RegData! [!RegType!].
+endlocal
+exit /b 0
+
+
+:SetRegistryValue_Failed
+if defined TBOK_PROFILE_SUMMARY_MODE goto :SetRegistryValue_SummaryFailed
+
+call :LOG ERROR: Failed to configure !RegDescription!. Exit code: !RegistryWriteRC!.
+endlocal
+exit /b 1
+
+
+:SetRegistryValue_SummarySkipped
+endlocal
+set /a "TBOK_PROFILE_SKIPPED+=1" >nul 2>&1
+exit /b 0
+
+
+:SetRegistryValue_SummaryApplied
+endlocal
+set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+exit /b 0
+
+
+:SetRegistryValue_SummaryFailed
+call :LOG ERROR: Failed to configure !RegDescription!. Exit code: !RegistryWriteRC!.
+endlocal
+set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+exit /b 1
+
+
+:SetRegistryValue_InvalidPath
+call :LOG ERROR: SetRegistryValue was called without a registry path.
+endlocal
+exit /b 2
+
+
+:SetRegistryValue_InvalidName
+call :LOG ERROR: SetRegistryValue was called without a registry value name.
+endlocal
+exit /b 2
+
+
+:SetRegistryValue_InvalidType
+call :LOG ERROR: SetRegistryValue was called without a registry type.
+endlocal
+exit /b 2
+
+:SetRegistryValueQuiet
+:: Adds a named registry value without querying its previous state.
+:: In profile-summary mode, successful writes count as Applied.
+setlocal DisableDelayedExpansion
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: SetRegistryValueQuiet was called without a registry path.
@@ -1387,17 +1553,27 @@ if "%~3"=="" (
 REG ADD "%~1" /v "%~2" /t "%~3" /d "%~4" /f >nul 2>>"%LOGFILE%"
 set "RegWriteRC=%ERRORLEVEL%"
 if not "%RegWriteRC%"=="0" (
-    endlocal
-    call :LOG ERROR: Failed to configure %~5. Exit code: %RegWriteRC%.
-    exit /b 1
+    for %%R in ("%RegWriteRC%") do (
+        if defined TBOK_PROFILE_SUMMARY_MODE (
+            endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+            call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
+        ) else (
+            endlocal
+            call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
+        )
+        exit /b 1
+    )
 )
-endlocal
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+)
 exit /b 0
 
 :EnsureRegistryKey
-::Adds a registry key without named value while handling error types to reduce code, console noise, and log
+:: Creates or verifies a registry key.
 setlocal DisableDelayedExpansion
-
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: EnsureRegistryKey was called without a registry path.
@@ -1407,11 +1583,22 @@ REG ADD "%~1" /f >nul 2>>"%LOGFILE%"
 set "RegistryKeyRC=%ERRORLEVEL%"
 
 if not "%RegistryKeyRC%"=="0" (
-    endlocal
-    call :LOG ERROR: Failed to create or verify %~2. Exit code: %RegistryKeyRC%.
-    exit /b 1
+    for %%R in ("%RegistryKeyRC%") do (
+        if defined TBOK_PROFILE_SUMMARY_MODE (
+            endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+            call :LOG ERROR: Failed to create or verify %~2. Exit code: %%~R.
+        ) else (
+            endlocal
+            call :LOG ERROR: Failed to create or verify %~2. Exit code: %%~R.
+        )
+        exit /b 1
+    )
 )
-endlocal
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+)
 exit /b 0
 
 :DeleteRegistryKeyIfPresent
@@ -1422,19 +1609,35 @@ if "%~1"=="" (
     exit /b 2
 )
 REG query "%~1" >nul 2>&1
+
 if errorlevel 1 (
-    endlocal
+    if defined TBOK_PROFILE_SUMMARY_MODE (
+        endlocal & set /a "TBOK_PROFILE_SKIPPED+=1" >nul 2>&1
+    ) else (
+        endlocal
+    )
     exit /b 0
 )
 REG delete "%~1" /f >nul 2>>"%LOGFILE%"
 set "DeleteKeyRC=%ERRORLEVEL%"
 if not "%DeleteKeyRC%"=="0" (
-    endlocal
-    call :LOG ERROR: Failed to delete %~2. Exit code: %DeleteKeyRC%.
-    exit /b 1
+    for %%R in ("%DeleteKeyRC%") do (
+        if defined TBOK_PROFILE_SUMMARY_MODE (
+            endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+            call :LOG ERROR: Failed to delete %~2. Exit code: %%~R.
+        ) else (
+            endlocal
+            call :LOG ERROR: Failed to delete %~2. Exit code: %%~R.
+        )
+        exit /b 1
+    )
 )
-endlocal
-call :LOG Deleted %~2.
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+    call :LOG Deleted %~2.
+)
 exit /b 0
 
 :DeleteRegistryValueIfPresent
@@ -1451,18 +1654,33 @@ if "%~2"=="" (
 )
 REG query "%~1" /v "%~2" >nul 2>&1
 if errorlevel 1 (
-    endlocal
+    if defined TBOK_PROFILE_SUMMARY_MODE (
+        endlocal & set /a "TBOK_PROFILE_SKIPPED+=1" >nul 2>&1
+    ) else (
+        endlocal
+    )
     exit /b 0
 )
 REG delete "%~1" /v "%~2" /f >nul 2>>"%LOGFILE%"
 set "DeleteValueRC=%ERRORLEVEL%"
 if not "%DeleteValueRC%"=="0" (
-    endlocal
-    call :LOG ERROR: Failed to delete %~3. Exit code: %DeleteValueRC%.
-    exit /b 1
+    for %%R in ("%DeleteValueRC%") do (
+        if defined TBOK_PROFILE_SUMMARY_MODE (
+            endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+            call :LOG ERROR: Failed to delete %~3. Exit code: %%~R.
+        ) else (
+            endlocal
+            call :LOG ERROR: Failed to delete %~3. Exit code: %%~R.
+        )
+        exit /b 1
+    )
 )
-endlocal
-call :LOG Deleted %~3.
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+    call :LOG Deleted %~3.
+)
 exit /b 0
 
 :SaveMountedHiveBackup
@@ -1514,40 +1732,83 @@ if not defined TBOK_MEMORY_MB exit /b 1
 if not defined TBOK_MEMORY_GB exit /b 1
 exit /b 0
 
-:ResolveMemoryPolicy
-:: Low-memory systems keep SysMain Automatic so MMAgent workers remain available.
-:: This policy applies to SSD, HDD, RAID, and unknown storage.
-:: Higher-memory systems use the storage-based SysMain policy and do not modify MMAgent.
+
+:ResolveSystemPolicy
+:: Resolve all hardware-dependent targets
+if defined TBOK_POLICY_ALREADY_RESOLVED exit /b 0
 set "TBOK_SYSMAIN_MODE=unchanged"
-set "TBOK_LOW_MEMORY=0"
-set "TBOK_MANAGE_MMAGENT=0"
+set "TBOK_MMAGENT_POLICY=Unchanged"
+set "TBOK_LOW_MEMORY_POLICY=No"
+set "TBOK_HIBERNATION_POLICY=Unchanged"
+set "TBOK_PAGEFILE_POLICY=Unchanged"
+set "TBOK_PAGEFILE_INITIAL_MB="
+set "TBOK_PAGEFILE_MAXIMUM_MB="
+set "TBOK_POWERPLAN_POLICY=Unchanged"
 
 if not defined TBOK_MEMORY_MB (
     call :LOG ERROR: Installed RAM is unavailable.
-    call :LOG The SysMain and MMAgent policy could not be resolved.
+    call :LOG Hardware-dependent policy targets could not be resolved.
     exit /b 1
 )
+
+if not defined TBOK_MEMORY_GB set "TBOK_MEMORY_GB=Unknown"
+if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
+if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
+
+:: Hibernation and Gaming power-plan policies.
+if /I "!CHASSISTYPE!"=="Laptop" (
+    set "TBOK_HIBERNATION_POLICY=Enabled"
+    set "TBOK_POWERPLAN_POLICY=Current"
+) else if /I "!CHASSISTYPE!"=="Desktop" (
+    set "TBOK_HIBERNATION_POLICY=Disabled"
+    set "TBOK_POWERPLAN_POLICY=Ultimate Performance"
+)
+
+:: Low-memory policy overrides storage type.
 if !TBOK_MEMORY_MB! LEQ 12288 (
-    set "TBOK_LOW_MEMORY=1"
-    set "TBOK_MANAGE_MMAGENT=1"
+    set "TBOK_LOW_MEMORY_POLICY=Yes"
+    set "TBOK_MMAGENT_POLICY=Enabled"
     set "TBOK_SYSMAIN_MODE=auto"
 ) else if /I "!TBOK_DRIVETYPE!"=="SSD" (
     set "TBOK_SYSMAIN_MODE=disabled"
 ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
     set "TBOK_SYSMAIN_MODE=demand"
 )
-call :LOG Resolved memory policy:
+
+:: Page-file policy.
+if !TBOK_MEMORY_MB! GEQ 32768 (
+    set "TBOK_PAGEFILE_POLICY=Unchanged"
+) else if !TBOK_MEMORY_MB! LSS 8192 (
+    set "TBOK_PAGEFILE_INITIAL_MB=4096"
+    set "TBOK_PAGEFILE_MAXIMUM_MB=16384"
+    set "TBOK_PAGEFILE_POLICY=4096-16384 MB"
+) else if !TBOK_MEMORY_MB! LSS 16384 (
+    set "TBOK_PAGEFILE_INITIAL_MB=8192"
+    set "TBOK_PAGEFILE_MAXIMUM_MB=24576"
+    set "TBOK_PAGEFILE_POLICY=8192-24576 MB"
+) else (
+    set "TBOK_PAGEFILE_INITIAL_MB=8192"
+    set "TBOK_PAGEFILE_MAXIMUM_MB=32768"
+    set "TBOK_PAGEFILE_POLICY=8192-32768 MB"
+)
+
+call :LOG Resolved system policy:
 call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
-call :LOG Low-memory profile: !TBOK_LOW_MEMORY!
-call :LOG Manage MMAgent features: !TBOK_MANAGE_MMAGENT!
-call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
+call :LOG Chassis profile: !CHASSISTYPE!
+call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
+call :LOG SysMain target: !TBOK_SYSMAIN_MODE!
+call :LOG MMAgent target: !TBOK_MMAGENT_POLICY!
+call :LOG Hibernation target: !TBOK_HIBERNATION_POLICY!
+call :LOG Page-file target: !TBOK_PAGEFILE_POLICY!
+call :LOG Gaming power-plan target: !TBOK_POWERPLAN_POLICY!
+set "TBOK_POLICY_ALREADY_RESOLVED=1"
 exit /b 0
 
 :: Configure MMAgent features only for the low-memory profile.
 :ConfigureMemoryFeatures
-if not "!TBOK_MANAGE_MMAGENT!"=="1" (
-    call :LOG MMAgent settings were left unchanged because this is not a low-memory profile.
+if /I not "!TBOK_MMAGENT_POLICY!"=="Enabled" (
+    call :LOG MMAgent settings were left unchanged by the resolved system policy.
     exit /b 0
 )
 
@@ -1734,10 +1995,13 @@ if exist "%TBOK_MEMORY_FILE%" (
     del /q "%TBOK_MEMORY_FILE%" >nul 2>&1
 )
 if not "%TBOK_MEMORY_RC%"=="0" (
-    endlocal
-    call :LOG WARNING: Memory snapshot "%~1" failed with exit code %TBOK_MEMORY_RC%.
-    exit /b 1
+    for %%R in ("%TBOK_MEMORY_RC%") do (
+        endlocal
+        call :LOG WARNING: Memory snapshot "%~1" failed with exit code %%~R.
+        exit /b 1
+    )
 )
+
 endlocal
 exit /b 0
 
@@ -1749,12 +2013,18 @@ exit /b
 
 :GetSystemProfile
 :: Helper to build variables required hardware profile for specific scenario optimizations
+if defined TBOK_MEMORY_MB if defined TBOK_DRIVETYPE if defined CHASSISTYPE (
+    exit /b 0
+)
+set "SystemProfileFailed=0"
 call :LOG Building hardware profile...
 call :GetInstalledMemory
 set "SystemProfileMemoryRC=!ERRORLEVEL!"
 if not "!SystemProfileMemoryRC!"=="0" (
+    set "SystemProfileFailed=1"
     call :LOG WARNING: Installed memory could not be determined.
 )
+
 call :GetChassisType
 call :LOG Chassis profile: !CHASSISTYPE!
 ::Detect whether the Windows system drive is an HDD or SSD and physical media type 
@@ -1820,6 +2090,7 @@ if exist "%DriveDetectFile%" (
     type "%DriveDetectFile%" >>"%LOGFILE%"
 )
 if not "!DriveDetectRC!"=="0" (
+    set "SystemProfileFailed=1"
     call :LOG WARNING: Drive detection PowerShell returned exit code !DriveDetectRC!.
     
 	if defined DriveDetectFile (
@@ -1838,6 +2109,7 @@ for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"RESULT=" "%DriveDetectFile%
 if /i not "!TBOK_DRIVETYPE!"=="HDD" if /i not "!TBOK_DRIVETYPE!"=="SSD" (
     set "TBOK_DRIVETYPE=UNKNOWN"
 )
+
 :GetSystemProfileCleanup
 if defined DriveDetectFile (
     if exist "%DriveDetectFile%" (
@@ -1845,6 +2117,11 @@ if defined DriveDetectFile (
     )
 )
 call :LOG Storage profile: !TBOK_DRIVETYPE!
+if "!SystemProfileFailed!"=="1" (
+    set "SystemProfileFailed="
+    exit /b 1
+)
+set "SystemProfileFailed="
 exit /b 0
 
 :InitializeTemporaryPlans
@@ -1873,6 +2150,17 @@ if defined TBOK_TASK_PLAN (
 if defined TBOK_APPX_INVENTORY (
     if exist "%TBOK_APPX_INVENTORY%" (
         del /q "%TBOK_APPX_INVENTORY%" >nul 2>&1
+    )
+)
+if defined TBOK_REMOTE_CONTROLLER (
+    if exist "!TBOK_REMOTE_CONTROLLER!" (
+        del /q "!TBOK_REMOTE_CONTROLLER!" >nul 2>&1
+    )
+)
+
+if defined TBOK_REMOTE_CONTROLLER_RAW (
+    if exist "!TBOK_REMOTE_CONTROLLER_RAW!" (
+        del /q "!TBOK_REMOTE_CONTROLLER_RAW!" >nul 2>&1
     )
 )
 exit /b 0
@@ -1969,42 +2257,645 @@ set "TBOK_RUN_EXIT="
 set "TBOK_ARGUMENT_ERROR="
 goto :Finished
 
+:UnlockHiddenPowerSettings
+call :LOG Unlocking all hidden Power Plan attributes
+setlocal EnableDelayedExpansion
+set "TBOK_POWER_UNLOCK=%TEMP%\TBOK-PowerUnlock-%RANDOM%-%RANDOM%.ps1"
+
+(
+echo $keys = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue
+echo foreach ^($key in $keys^) ^{
+echo     try ^{
+echo         if ^($key.Name -notmatch 'DefaultPowerSchemeValues'^) ^{
+echo             Set-ItemProperty -Path $key.PSPath -Name Attributes -Value 2 -Force -ErrorAction SilentlyContinue
+echo         ^}
+echo     ^}
+echo     catch ^{
+echo     ^}
+echo ^}
+) >"!TBOK_POWER_UNLOCK!"
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "!TBOK_POWER_UNLOCK!" >>"%LOGFILE%" 2>&1
+set "PowerUnlockRC=!ERRORLEVEL!"
+
+if exist "!TBOK_POWER_UNLOCK!" (
+    del /q "!TBOK_POWER_UNLOCK!" >nul 2>&1
+)
+if not "!PowerUnlockRC!"=="0" (
+    endlocal
+    call :LOG WARNING: Failed to unlock one or more hidden power settings.
+    exit /b 1
+)
+endlocal
+call :LOG Hidden power-plan settings unlocked successfully.
+exit /b 0
+
+:ConfigureProcessorBoostMode
+setlocal EnableDelayedExpansion
+set "BoostAC=%~1"
+set "BoostDC=%~2"
+set "BoostDescription=%~3"
+
+powercfg.exe -attributes SUB_PROCESSOR PERFBOOSTMODE -ATTRIB_HIDE >>"%LOGFILE%" 2>&1
+set "BoostAttributeRC=!ERRORLEVEL!"
+
+powercfg.exe -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE !BoostAC! >>"%LOGFILE%" 2>&1
+set "BoostACRC=!ERRORLEVEL!"
+
+powercfg.exe -setdcvalueindex SCHEME_CURRENT SUB_PROCESSOR PERFBOOSTMODE !BoostDC! >>"%LOGFILE%" 2>&1
+set "BoostDCRC=!ERRORLEVEL!"
+
+powercfg.exe -setactive SCHEME_CURRENT >>"%LOGFILE%" 2>&1
+set "BoostActivateRC=!ERRORLEVEL!"
+
+if not "!BoostAttributeRC!!BoostACRC!!BoostDCRC!!BoostActivateRC!"=="0000" (
+    endlocal
+    call :LOG WARNING: Processor Performance Boost Mode configuration did not complete successfully.
+    exit /b 1
+)
+endlocal
+call :LOG Processor Performance Boost Mode configured: %~3.
+exit /b 0
+
+:DetectRemoteRequest
+:: Detect /REMOTE or /REMOTELIST and preserve all operation switches.
+:: /REMOTE and /REMOTELIST are mutually exclusive.
+set "TBOK_REMOTE_HOST="
+set "TBOK_REMOTE_LIST_FILE="
+set "TBOK_REMOTE_OPERATION_ARGS="
+set "TBOK_REMOTE_DESTINATION_FOUND=0"
+set "TBOK_REMOTE_OPERATION_FOUND=0"
+
+:DetectRemoteRequestNext
+if "%~1"=="" goto :DetectRemoteRequestComplete
+
+if /I "%~1"=="/REMOTE" (
+    if "%~2"=="" (
+        echo ERROR: /REMOTE requires a destination computer name.
+        exit /b 2
+    )
+
+    if defined TBOK_REMOTE_LIST_FILE (
+        echo ERROR: /REMOTE cannot be combined with /REMOTELIST.
+        exit /b 2
+    )
+
+    if "!TBOK_REMOTE_DESTINATION_FOUND!"=="1" (
+        echo ERROR: A remote destination was specified more than once.
+        exit /b 2
+    )
+
+    set "TBOK_REMOTE_DESTINATION_FOUND=1"
+    set "TBOK_REMOTE_HOST=%~2"
+
+    shift
+    shift
+    goto :DetectRemoteRequestNext
+)
+
+if /I "%~1"=="/REMOTELIST" (
+    if "%~2"=="" (
+        echo ERROR: /REMOTELIST requires a computer-list file.
+        exit /b 2
+    )
+
+    if defined TBOK_REMOTE_HOST (
+        echo ERROR: /REMOTELIST cannot be combined with /REMOTE.
+        exit /b 2
+    )
+
+    if "!TBOK_REMOTE_DESTINATION_FOUND!"=="1" (
+        echo ERROR: A remote destination was specified more than once.
+        exit /b 2
+    )
+
+    set "TBOK_REMOTE_DESTINATION_FOUND=1"
+    set "TBOK_REMOTE_LIST_FILE=%~2"
+
+    shift
+    shift
+    goto :DetectRemoteRequestNext
+)
+
+if /I "%~1"=="/OPTIMIZE" set "TBOK_REMOTE_OPERATION_FOUND=1"
+if /I "%~1"=="/CLEANUP" set "TBOK_REMOTE_OPERATION_FOUND=1"
+if /I "%~1"=="/GAMING" set "TBOK_REMOTE_OPERATION_FOUND=1"
+if /I "%~1"=="/WINGET" set "TBOK_REMOTE_OPERATION_FOUND=1"
+
+set "TBOK_REMOTE_OPERATION_ARGS=!TBOK_REMOTE_OPERATION_ARGS! %~1"
+
+shift
+goto :DetectRemoteRequestNext
+
+
+:DetectRemoteRequestComplete
+if "!TBOK_REMOTE_DESTINATION_FOUND!"=="0" (
+    set "TBOK_REMOTE_OPERATION_ARGS="
+    set "TBOK_REMOTE_OPERATION_FOUND="
+    set "TBOK_REMOTE_DESTINATION_FOUND="
+    exit /b 0
+)
+
+if "!TBOK_REMOTE_OPERATION_FOUND!"=="0" (
+    echo ERROR: Remote execution requires at least one operation switch.
+    echo.
+    echo Single-computer example:
+    echo %~nx0 /OPTIMIZE /REMOTE COMPUTER01
+    echo.
+    echo Multiple-computer example:
+    echo %~nx0 /OPTIMIZE /REMOTELIST computers.txt
+    exit /b 2
+)
+
+set "TBOK_REMOTE_OPERATION_ARGS=!TBOK_REMOTE_OPERATION_ARGS:~1!"
+set "TBOK_REMOTE_OPERATION_FOUND="
+set "TBOK_REMOTE_DESTINATION_FOUND="
+
+exit /b 0
+
+:BuildRemoteController
+:: Extract the embedded PowerShell controller from this batch file.
+set "TBOK_REMOTE_CONTROLLER=%TEMP%\TBOKRemoteController-%RANDOM%-%RANDOM%.ps1"
+set "TBOK_REMOTE_CONTROLLER_RAW=%TEMP%\TBOKRemoteController-%RANDOM%-%RANDOM%.raw"
+set "BuildRemoteControllerRC=1"
+
+if exist "!TBOK_REMOTE_CONTROLLER!" (
+    del /q "!TBOK_REMOTE_CONTROLLER!" >nul 2>&1
+)
+
+if exist "!TBOK_REMOTE_CONTROLLER_RAW!" (
+    del /q "!TBOK_REMOTE_CONTROLLER_RAW!" >nul 2>&1
+)
+
+findstr /B /L /C:"::TBOK-REMOTE-PS::" "%~f0" >"!TBOK_REMOTE_CONTROLLER_RAW!"
+
+if errorlevel 1 (
+    echo ERROR: The embedded remote-controller payload was not found.
+    set "TBOK_REMOTE_CONTROLLER="
+    set "TBOK_REMOTE_CONTROLLER_RAW="
+    exit /b 1
+)
+
+set "TBOK_REMOTE_CONTROLLER_RAW_ENV=!TBOK_REMOTE_CONTROLLER_RAW!"
+set "TBOK_REMOTE_CONTROLLER_ENV=!TBOK_REMOTE_CONTROLLER!"
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$prefix='::TBOK-REMOTE-PS::';$source=$env:TBOK_REMOTE_CONTROLLER_RAW_ENV;$destination=$env:TBOK_REMOTE_CONTROLLER_ENV;try{$lines=Get-Content -LiteralPath $source -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};Set-Content -LiteralPath $destination -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0}catch{Write-Output ('ERROR: Remote controller creation failed: '+$_.Exception.Message);exit 1}"
+
+set "BuildRemoteControllerRC=!ERRORLEVEL!"
+
+set "TBOK_REMOTE_CONTROLLER_RAW_ENV="
+set "TBOK_REMOTE_CONTROLLER_ENV="
+
+if exist "!TBOK_REMOTE_CONTROLLER_RAW!" (
+    del /q "!TBOK_REMOTE_CONTROLLER_RAW!" >nul 2>&1
+)
+
+set "TBOK_REMOTE_CONTROLLER_RAW="
+
+if not "!BuildRemoteControllerRC!"=="0" (
+    if exist "!TBOK_REMOTE_CONTROLLER!" (
+        del /q "!TBOK_REMOTE_CONTROLLER!" >nul 2>&1
+    )
+
+    set "TBOK_REMOTE_CONTROLLER="
+    echo ERROR: The remote controller could not be created.
+    exit /b 1
+)
+
+if not exist "!TBOK_REMOTE_CONTROLLER!" (
+    set "TBOK_REMOTE_CONTROLLER="
+    echo ERROR: The generated remote-controller file was not found.
+    exit /b 1
+)
+
+for %%F in ("!TBOK_REMOTE_CONTROLLER!") do (
+    if %%~zF LEQ 0 (
+        del /q "!TBOK_REMOTE_CONTROLLER!" >nul 2>&1
+        set "TBOK_REMOTE_CONTROLLER="
+        echo ERROR: The generated remote-controller file is empty.
+        exit /b 1
+    )
+)
+
+exit /b 0
+
+:RunRemoteList
+setlocal EnableExtensions EnableDelayedExpansion
+
+set "RemoteListPath=!TBOK_REMOTE_LIST_FILE!"
+set "RemoteListAttempted=0"
+set "RemoteListSucceeded=0"
+set "RemoteListFailed=0"
+set "RemoteListSkipped=0"
+set "RemoteListFailedHosts="
+
+:: Resolve relative list paths beside the TBOK batch file.
+if not exist "!RemoteListPath!" (
+    if exist "%~dp0!RemoteListPath!" (
+        set "RemoteListPath=%~dp0!RemoteListPath!"
+    )
+)
+
+if not exist "!RemoteListPath!" (
+    endlocal
+    echo ERROR: Remote computer-list file was not found.
+    echo Requested file: %TBOK_REMOTE_LIST_FILE%
+    exit /b 2
+)
+
+echo.
+echo ================================================================
+echo TBOK Multi-Computer Remote Optimization
+echo ================================================================
+echo Computer list : !RemoteListPath!
+echo Operations    : !TBOK_REMOTE_OPERATION_ARGS!
+echo Execution     : Sequential
+echo ================================================================
+echo.
+
+for /f "usebackq tokens=* delims=" %%H in ("!RemoteListPath!") do (
+    set "RemoteListHost=%%H"
+
+    if not defined RemoteListHost (
+        set /a "RemoteListSkipped+=1"
+    ) else (
+        if "!RemoteListHost:~0,1!"=="#" (
+            set /a "RemoteListSkipped+=1"
+        ) else (
+            set /a "RemoteListAttempted+=1"
+            set "TBOK_REMOTE_HOST=!RemoteListHost!"
+
+            echo.
+            echo ================================================================
+            echo Remote computer !RemoteListAttempted!: !TBOK_REMOTE_HOST!
+            echo ================================================================
+
+            call :RunRemoteController
+            set "RemoteHostRC=!ERRORLEVEL!"
+
+            if "!RemoteHostRC!"=="0" (
+                set /a "RemoteListSucceeded+=1"
+                echo RESULT: !TBOK_REMOTE_HOST! completed successfully.
+            ) else (
+                set /a "RemoteListFailed+=1"
+                set "RemoteListFailedHosts=!RemoteListFailedHosts! !TBOK_REMOTE_HOST!"
+                echo RESULT: !TBOK_REMOTE_HOST! failed with exit code !RemoteHostRC!.
+            )
+        )
+    )
+)
+
+echo.
+echo ================================================================
+echo TBOK Remote Deployment Summary
+echo ================================================================
+echo Computers attempted : !RemoteListAttempted!
+echo Successful          : !RemoteListSucceeded!
+echo Failed              : !RemoteListFailed!
+echo Blank/comment lines : !RemoteListSkipped!
+
+if not "!RemoteListFailed!"=="0" (
+    echo Failed computers     :!RemoteListFailedHosts!
+)
+
+echo ================================================================
+echo.
+
+if "!RemoteListAttempted!"=="0" (
+    endlocal
+    echo ERROR: The remote computer-list file contained no computer names.
+    exit /b 2
+)
+
+if not "!RemoteListFailed!"=="0" (
+    endlocal
+    exit /b 1
+)
+
+endlocal
+exit /b 0
+
+:RunRemoteController
+call :BuildRemoteController
+set "BuildRemoteControllerRC=!ERRORLEVEL!"
+
+if not "!BuildRemoteControllerRC!"=="0" (
+    exit /b !BuildRemoteControllerRC!
+)
+
+echo.
+echo ================================================================
+echo TBOK Remote Optimization
+echo ================================================================
+echo Destination : !TBOK_REMOTE_HOST!
+echo Operations  : !TBOK_REMOTE_OPERATION_ARGS!
+echo Local source: %~f0
+echo Local output: %~dp0
+echo ================================================================
+echo.
+set "TBOK_REMOTE_ARGUMENT_TEXT=!TBOK_REMOTE_OPERATION_ARGS!"
+set "TBOK_LOCAL_OUTPUT_PATH=%~dp0"
+:: Remove the trailing backslash before passing the path to PowerShell.
+:: A quoted native argument ending in \" can consume the closing quote
+:: and merge -ArgumentText parameter into the path.
+if "!TBOK_LOCAL_OUTPUT_PATH:~-1!"=="\" (
+    set "TBOK_LOCAL_OUTPUT_PATH=!TBOK_LOCAL_OUTPUT_PATH:~0,-1!"
+)
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
+    -File "!TBOK_REMOTE_CONTROLLER!" ^
+    -ComputerName "!TBOK_REMOTE_HOST!" ^
+    -BatchPath "%~f0" ^
+    -LocalOutputPath "!TBOK_LOCAL_OUTPUT_PATH!" ^
+    -ArgumentText "!TBOK_REMOTE_ARGUMENT_TEXT!"
+
+set "RemoteControllerRC=!ERRORLEVEL!"
+set "TBOK_LOCAL_OUTPUT_PATH="
+set "TBOK_REMOTE_ARGUMENT_TEXT="
+
+if exist "!TBOK_REMOTE_CONTROLLER!" (
+    del /q "!TBOK_REMOTE_CONTROLLER!" >nul 2>&1
+)
+
+set "TBOK_REMOTE_CONTROLLER="
+
+if not "!RemoteControllerRC!"=="0" (
+    echo.
+    echo ERROR: Remote TBOK execution returned exit code !RemoteControllerRC!.
+    exit /b !RemoteControllerRC!
+)
+
+echo.
+echo Remote TBOK execution completed successfully.
+echo Retrieved remote log file was saved beside the local batch file.
+exit /b 0
+
+::TBOK-REMOTE-PS::[CmdletBinding()]
+::TBOK-REMOTE-PS::param(
+::TBOK-REMOTE-PS::    [Parameter(Mandatory = $true)]
+::TBOK-REMOTE-PS::    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+::TBOK-REMOTE-PS::    [string]$ComputerName,
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    [Parameter(Mandatory = $true)]
+::TBOK-REMOTE-PS::    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
+::TBOK-REMOTE-PS::    [string]$BatchPath,
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    [Parameter(Mandatory = $true)]
+::TBOK-REMOTE-PS::    [string]$LocalOutputPath,
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    [Parameter(Mandatory = $true)]
+::TBOK-REMOTE-PS::    [string]$ArgumentText
+::TBOK-REMOTE-PS::)
+::TBOK-REMOTE-PS::    Write-Host ('ArgumentText = [' + $ArgumentText + ']')
+::TBOK-REMOTE-PS::    Write-Host ('LocalOutputPath = [' + $LocalOutputPath + ']')
+
+::TBOK-REMOTE-PS::$ErrorActionPreference = 'Stop'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::$remoteDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::$remoteBatchName = Split-Path -Leaf $BatchPath
+::TBOK-REMOTE-PS::$remoteBatchPath = Join-Path $remoteDirectory $remoteBatchName
+::TBOK-REMOTE-PS::$session = $null
+::TBOK-REMOTE-PS::$remoteExitCode = 1
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::$arguments = @(
+::TBOK-REMOTE-PS::    $ArgumentText -split '\s+' |
+::TBOK-REMOTE-PS::        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+::TBOK-REMOTE-PS::)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::$allowedArguments = @(
+::TBOK-REMOTE-PS::    '/OPTIMIZE'
+::TBOK-REMOTE-PS::    '/CLEANUP'
+::TBOK-REMOTE-PS::    '/GAMING'
+::TBOK-REMOTE-PS::    '/WINGET'
+::TBOK-REMOTE-PS::    '/NEWLOG'
+::TBOK-REMOTE-PS::    '/RESTART'
+::TBOK-REMOTE-PS::)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::foreach ($argument in $arguments) {
+::TBOK-REMOTE-PS::    if ($allowedArguments -notcontains $argument.ToUpperInvariant()) {
+::TBOK-REMOTE-PS::        throw "Unsupported remote TBOK argument: $argument"
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::}
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::$restartRequested = $arguments -contains '/RESTART'
+::TBOK-REMOTE-PS::$remoteArguments = @(
+::TBOK-REMOTE-PS::    $arguments |
+::TBOK-REMOTE-PS::        Where-Object { $_ -ine '/RESTART' }
+::TBOK-REMOTE-PS::)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::try {
+::TBOK-REMOTE-PS::    Write-Host "Connecting to $ComputerName..."
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $session = New-PSSession -ComputerName $ComputerName -ErrorAction Stop
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host 'Verifying remote administrative access...'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        & "$env:SystemRoot\System32\fltmc.exe" *> $null
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        if ($LASTEXITCODE -ne 0) {
+::TBOK-REMOTE-PS::            throw 'The remote PowerShell session does not have administrative rights.'
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host "Preparing remote working directory: $remoteDirectory"
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        param($Directory)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        New-Item -Path $Directory -ItemType Directory -Force |
+::TBOK-REMOTE-PS::            Out-Null
+::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host "Copying $remoteBatchName to $ComputerName..."
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Copy-Item `
+::TBOK-REMOTE-PS::        -LiteralPath $BatchPath `
+::TBOK-REMOTE-PS::        -Destination $remoteBatchPath `
+::TBOK-REMOTE-PS::        -ToSession $session `
+::TBOK-REMOTE-PS::        -Force
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host ('Starting remote operations: ' + ($remoteArguments -join ' '))
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $remoteExitCode = Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        param(
+::TBOK-REMOTE-PS::            $WorkingDirectory,
+::TBOK-REMOTE-PS::            $RemoteBatch,
+::TBOK-REMOTE-PS::            [string[]]$Arguments
+::TBOK-REMOTE-PS::        )
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        $argumentLine = $Arguments -join ' '
+::TBOK-REMOTE-PS::        $commandLine = '/d /c ""{0}" {1}"' -f $RemoteBatch, $argumentLine
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        $process = Start-Process `
+::TBOK-REMOTE-PS::            -FilePath $env:ComSpec `
+::TBOK-REMOTE-PS::            -ArgumentList $commandLine `
+::TBOK-REMOTE-PS::            -WorkingDirectory $WorkingDirectory `
+::TBOK-REMOTE-PS::            -NoNewWindow `
+::TBOK-REMOTE-PS::            -Wait `
+::TBOK-REMOTE-PS::            -PassThru
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        return [int]$process.ExitCode
+::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory, $remoteBatchPath, $remoteArguments
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host "Remote TBOK exit code: $remoteExitCode"
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host 'Locating remote TBOK log file...'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $logFile = Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        param($Directory)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        Get-ChildItem `
+::TBOK-REMOTE-PS::            -LiteralPath $Directory `
+::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.log' `
+::TBOK-REMOTE-PS::            -File `
+::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::                Sort-Object LastWriteTime -Descending |
+::TBOK-REMOTE-PS::                Select-Object -First 1
+::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    if ($null -eq $logFile) {
+::TBOK-REMOTE-PS::        throw 'No TBOK log file was found on the remote computer.'
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host ('Remote log identified: ' + $logFile.FullName)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $remoteLogPath = [string]$logFile.FullName
+::TBOK-REMOTE-PS::    $remoteLogName = Split-Path -Leaf $remoteLogPath
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $localLogFile = Join-Path `
+::TBOK-REMOTE-PS::        $LocalOutputPath `
+::TBOK-REMOTE-PS::        $remoteLogName
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host ('Remote path type : ' + $logFile.GetType().FullName)
+::TBOK-REMOTE-PS::    Write-Host ('Remote path value: ' + $remoteLogPath)
+::TBOK-REMOTE-PS::    Write-Host ('Remote file name : ' + $remoteLogName)
+::TBOK-REMOTE-PS::    Write-Host ('Local output    : ' + $LocalOutputPath)
+::TBOK-REMOTE-PS::    Write-Host ('Local log path  : ' + $localLogFile)
+::TBOK-REMOTE-PS::    Write-Host ('Destination type : ' + $localLogFile.GetType().FullName)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Copy-Item `
+::TBOK-REMOTE-PS::        -LiteralPath $remoteLogPath `
+::TBOK-REMOTE-PS::        -Destination $localLogFile `
+::TBOK-REMOTE-PS::        -FromSession $session `
+::TBOK-REMOTE-PS::        -Force `
+::TBOK-REMOTE-PS::        -ErrorAction Stop
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    if (-not (Test-Path -LiteralPath $localLogFile -PathType Leaf)) {
+::TBOK-REMOTE-PS::        throw 'The remote log file was not copied to the local computer.'
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host ('Retrieved log file: ' + $localLogFile)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host 'Removing remote TBOK execution artifacts...'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        $tbokDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        Get-ChildItem `
+::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
+::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.log' `
+::TBOK-REMOTE-PS::            -File `
+::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        Get-ChildItem `
+::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
+::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.bat' `
+::TBOK-REMOTE-PS::            -File `
+::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    } -ErrorAction Stop
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    Write-Host 'Remote batch and log files removed successfully.'
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    if ($restartRequested) {
+::TBOK-REMOTE-PS::        if ($remoteExitCode -eq 0) {
+::TBOK-REMOTE-PS::            Write-Host 'Artifacts retrieved successfully.'
+::TBOK-REMOTE-PS::            Write-Host "Restarting $ComputerName in 5 seconds..."
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::            Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::                shutdown.exe /r /t 5 /f
+::TBOK-REMOTE-PS::            }
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::        else {
+::TBOK-REMOTE-PS::            Write-Warning '/RESTART was requested, but the remote TBOK run failed.'
+::TBOK-REMOTE-PS::            Write-Warning 'The remote computer was not restarted.'
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::}
+::TBOK-REMOTE-PS::catch {
+::TBOK-REMOTE-PS::    Write-Error $_.Exception.Message
+::TBOK-REMOTE-PS::    $remoteExitCode = 1
+::TBOK-REMOTE-PS::}
+::TBOK-REMOTE-PS::finally {
+::TBOK-REMOTE-PS::    if ($null -ne $session) {
+::TBOK-REMOTE-PS::        Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::}
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::exit [int]$remoteExitCode
+
 :END-SCRIPT-HELPERS
 
+:RefreshMenuProfile
+if not defined TBOK_MEMORY_MB (
+    call :GetSystemProfile >nul 2>&1
+)
+
+if defined TBOK_MEMORY_MB (
+    call :ResolveSystemPolicy >nul 2>&1
+)
+
+if not defined TBOK_MEMORY_GB set "TBOK_MEMORY_GB=Unknown"
+if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
+if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
+if not defined TBOK_SYSMAIN_MODE set "TBOK_SYSMAIN_MODE=unchanged"
+if not defined TBOK_MMAGENT_POLICY set "TBOK_MMAGENT_POLICY=Unchanged"
+if not defined TBOK_LOW_MEMORY_POLICY set "TBOK_LOW_MEMORY_POLICY=Unknown"
+if not defined TBOK_HIBERNATION_POLICY set "TBOK_HIBERNATION_POLICY=Unchanged"
+if not defined TBOK_PAGEFILE_POLICY set "TBOK_PAGEFILE_POLICY=Unchanged"
+if not defined TBOK_POWERPLAN_POLICY set "TBOK_POWERPLAN_POLICY=Unchanged"
+exit /b 0
+
 :MENU
+call :RefreshMenuProfile
 TITLE TBOK Windows Performance Optimizer Version %version% %verdate%
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
-ECHO Script now supports arguments for non-interactive sessions
-ECHO "run with /optimize /cleanup /gaming /winget /restart /newlog  for a menuless run"
-ECHO ============================================================
-ECHO                  THE BEARD OF KNOWLEDGE
-ECHO.
-ECHO        ::::::::::: :::::::::   ::::::::  :::    ::: 
-ECHO           :+:     :+:    :+: :+:    :+: :+:   :+:   
-ECHO          +:+     +:+    +:+ +:+    +:+ +:+  +:+     
-ECHO         +#+     +#++:++#+  +#+    +:+ +#++:++       
-ECHO        +#+     +#+    +#+ +#+    +#+ +#+  +#+       
-ECHO       #+#     #+#    #+# #+#    #+# #+#   #+#       
-ECHO      ###     #########   ########  ###    ### 
-ECHO.
-ECHO ============================================================
-ECHO  Welcome to TBOK Windows Performance Optimizer and Debloat
-ECHO             Version %version% %verdate%
-ECHO.
-ECHO Please choose
-ECHO 1. Apply system and user level improvements -RECOMMENDED START*Default Autorun*
-ECHO 2. Run BeardSweeper Ultimate Disk and Cache Cleanup routine
-ECHO 3. Apply only gaming tweaks - for desktops only
-ECHO 4. Update all apps using WinGet
-ECHO 5. EXIT
-ECHO.
-ECHO IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
-ECHO "https://buymeacoffee.com/thebeardofl"
-ECHO.
-ECHO ============================================================
-choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 15 seconds): " /t 15 /d 1 2>>"%LOGFILE%"
+echo %CLR_WARN%                   Script now supports cmd line options for non-interactive sessions
+echo %CLR_WARN%       or automation - run with /optimize /cleanup /gaming /winget /restart /newlog as options
+echo %CLR_TITLE% ********************************************************    ****************************************
+echo %CLR_MENU% *                THE BEARD OF KNOWLEDGE                *                 SYSTEM PROFILE
+echo %CLR_TITLE% *                                                      *
+echo %CLR_MENU% *      ::::::::::: :::::::::   ::::::::  :::    :::    *        Computer: %COMPUTERNAME%
+echo %CLR_MENU% *         :+:     :+:    :+: :+:    :+: :+:   :+:      *        RAM:      !TBOK_MEMORY_GB! GB
+echo %CLR_MENU% *        +:+     +:+    +:+ +:+    +:+ +:+  +:+        *        Storage:  !TBOK_DRIVETYPE!
+echo %CLR_MENU% *       +#+     +#++:++#+  +#+    +:+ +#++:++          *        Chassis:  !CHASSISTYPE!
+echo %CLR_MENU% *      +#+     +#+    +#+ +#+    +#+ +#+  +#+          *
+echo %CLR_MENU% *     #+#     #+#    #+# #+#    #+# #+#   #+#          *
+echo %CLR_MENU% *    ###     #########   ########  ###    ###          *
+echo %CLR_TITLE% *                                                      *
+echo %CLR_TITLE% *           Windows Performance Optimizer              *
+echo %CLR_TITLE% *           Version %version% %verdate%                   *
+echo %CLR_TITLE% ********************************************************    ****************************************
+echo %CLR_TITLE% *                                                      *                 Target Config:
+echo %CLR_TITLE% *                                                      *
+echo %CLR_OPTION% *     Please choose:                                   *        Low Ram Policy: !TBOK_LOW_MEMORY_POLICY! 
+echo %CLR_OPTION% *  1. Optimize system *RECOMMENDED                     *        Sysmain target: !TBOK_SYSMAIN_MODE!
+echo %CLR_OPTION% *  2. Run BeardSweeper Disk Cleanup routine            *        MMAgent target mode: !TBOK_MMAGENT_POLICY!   
+echo %CLR_OPTION% *  3. Apply Gaming Optimizations                       *        VM config target mode: !TBOK_PAGEFILE_POLICY!
+echo %CLR_OPTION% *  4. Update apps using WinGet                         *        Hibernation target mode: !TBOK_HIBERNATION_POLICY!
+echo %CLR_OPTION% *  5. EXIT                                             *        Gaming plan: !TBOK_POWERPLAN_POLICY!
+echo %CLR_TITLE% *                                                      *
+echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *          Log Reuse Enabled
+echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *
+echo %CLR_TITLE% ********************************************************    ****************************************
+echo %CLR_RESET%
+choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 15 seconds): " /t 20 /d 1 2>>"%LOGFILE%"
 set "MenuChoiceRC=%ERRORLEVEL%"
-
+color f0
 if "%MenuChoiceRC%"=="255" (
     call :LOG NOTICE: Interactive console input is unavailable.
     call :LOG NOTICE: Defaulting to menu option 1 - System and user improvements.
@@ -2076,7 +2967,7 @@ if errorlevel 1 (
 )
 
 :MemoryUseOptimization
-call :ResolveMemoryPolicy
+call :ResolveSystemPolicy
 set "MemoryPolicyRC=!ERRORLEVEL!"
 
 if not "!MemoryPolicyRC!"=="0" (
@@ -2119,32 +3010,16 @@ call :LOG Should be disabled for desktops-especially with SSD or NVME
 
 :detectchassis
 call :LOG Detected chassis category: !CHASSISTYPE!
-if /i "!CHASSISTYPE!"=="Laptop" goto laptop
-if /i "!CHASSISTYPE!"=="Desktop" goto desktop
-goto unknownchassis
-
-:laptop
-call :LOG Laptop detected - enabling hibernation and fast startup mode
-powercfg.exe /hibernate on >>"%LOGFILE%" 2>&1
-if errorlevel 1 (
-    call :LOG ERROR: Failed to enable hibernation.
+if /I "!TBOK_HIBERNATION_POLICY!"=="Enabled" (
+    call :LOG Laptop policy detected. Enabling hibernation and Fast Startup.
+    powercfg.exe /hibernate on >nul 2>&1
+) else if /I "!TBOK_HIBERNATION_POLICY!"=="Disabled" (
+    call :LOG Desktop policy detected. Disabling hibernation and Fast Startup.
+    powercfg.exe /hibernate off >nul 2>&1
 ) else (
-    call :LOG Hibernation enabled successfully.
+    call :LOG Hibernation policy is unchanged because chassis type could not be determined.
 )
-goto f8startup
 
-:desktop
-call :LOG Desktop detected - disabling hibernation and fast startup mode
-powercfg.exe /hibernate off >>"%LOGFILE%" 2>&1
-if errorlevel 1 (
-    call :LOG ERROR: Failed to disable hibernation.
-) else (
-    call :LOG Hibernation disabled successfully.
-)
-goto f8startup
-
-:unknownchassis
-call :LOG Unable to determine chassis type. Hibernation was not changed.
 goto f8startup
 	
 :F8startup
@@ -2183,23 +3058,21 @@ if not defined PageFileRamMB (
 )
 call :LOG Installed RAM: !PageFileRamMB! MB
 
-:: Leave systems with at least 32 GB unchanged.
-if !PageFileRamMB! GEQ 32768 (
-    call :LOG Installed RAM is 32 GB or greater.
+if /I "!TBOK_PAGEFILE_POLICY!"=="Unchanged" (
+    call :LOG Resolved page-file policy is Unchanged.
     call :LOG Page-file management mode, locations, and sizes were left unchanged.
     goto :SERVICES
 )
+set "PageFileInitialMB=!TBOK_PAGEFILE_INITIAL_MB!"
+set "PageFileMaximumMB=!TBOK_PAGEFILE_MAXIMUM_MB!"
 
-:: Select target sizes.
-if !PageFileRamMB! LSS 8192 (
-    set "PageFileInitialMB=4096"
-    set "PageFileMaximumMB=16384"
-) else if !PageFileRamMB! LSS 16384 (
-    set "PageFileInitialMB=8192"
-    set "PageFileMaximumMB=24576"
-) else (
-    set "PageFileInitialMB=8192"
-    set "PageFileMaximumMB=32768"
+if not defined PageFileInitialMB (
+    call :LOG ERROR: The resolved page-file initial size is unavailable.
+    goto :SERVICES
+)
+if not defined PageFileMaximumMB (
+    call :LOG ERROR: The resolved page-file maximum size is unavailable.
+    goto :SERVICES
 )
 
 call :LOG Target page-file sizes: Initial=!PageFileInitialMB! MB; Maximum=!PageFileMaximumMB! MB
@@ -2386,11 +3259,11 @@ call :LOG Applying the resolved SysMain and MMAgent service policy
 :: Systems with 12 GB or less RAM keep SysMain Automatic and running so
 :: Memory Compression, Page Combining, and the MMAgent workers remain available.
 :: Higher-memory SSD systems disable SysMain.
-:: Higher-memory HDD systems set SysMain to Demand.
+:: Higher-memory HDD systems set SysMain to Demand mode.
 :: Higher-memory systems with unknown storage leave SysMain unchanged.
 call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
-call :LOG Low-memory profile: !TBOK_LOW_MEMORY!
+call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
 call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
 
 if /I "!TBOK_SYSMAIN_MODE!"=="auto" (
@@ -2414,45 +3287,30 @@ call :LOG They still function when needed but are not auto running on startup
 call :LOG Many of these are manual by default anyway -FYI
 call :LOG Some of this process is just to restore that behaviour in case something changed them
 call :SetServiceStartup ALG demand
-::protectedCOREservice call :SetServiceStartup AppIDSvc demand
 call :SetServiceStartup AppMgmt demand
 call :SetServiceStartup AppReadiness demand
 call :SetServiceStartup Appinfo demand
 call :SetServiceStartup AssignedAccessManagerSvc demand
 call :SetServiceStartup AxInstSV demand
 call :SetServiceStartup BDESVC demand
-::ignored call :SetServiceStartup BcastDVRUserService_* demand
-::ignored call :SetServiceStartup BluetoothUserService_* demand
-::deprecated call :SetServiceStartup 'Browser' demand
 call :SetServiceStartup BTAGService demand
 call :SetServiceStartup bthserv demand
-::ignored call :SetServiceStartup CaptureService_* demand
-::ignored call :SetServiceStartup cbdhsvc_* demand
-::deprecated call :SetServiceStartup CDPSvc demand
 call :SetServiceStartup CertPropSvc demand
 call :SetServiceStartup cloudidsvc demand
 call :SetServiceStartup COMSysApp demand
-::protectedCOREservice call :SetServiceStartup ClipSVC demand
-::ignored call :SetServiceStartup ConsentUxUserSvc_* demand
-::ignored call :SetServiceStartup CredentialEnrollmentManagerUserSvc_* demand
 call :SetServiceStartup CscService demand
 call :SetServiceStartup DcpSvc demand
 call :SetServiceStartup dcsvc demand
 call :SetServiceStartup defragsvc demand
 call :SetServiceStartup DevQueryBroker demand
-::ignored call :SetServiceStartup DeviceAssociationBroker_* demand
 call :SetServiceStartup DeviceAssociationService demand
 call :SetServiceStartup DeviceInstall demand
-::ignored call :SetServiceStartup DevicePickerUserSvc_* demand
-::ignored call :SetServiceStartup DevicesFlowUserSvc_* demand
 call :SetServiceStartup diagnosticshub.standardcollector.service demand
 call :SetServiceStartup diagsvc demand
 call :SetServiceStartup DisplayEnhancementService demand
 call :SetServiceStartup DmEnrollmentSvc demand
 call :SetServiceStartup dmwappushservice demand
 call :SetServiceStartup dot3svc demand
-::protectedCOREservice call :SetServiceStartup DoSvc demand
-::protectedCOREservice call :SetServiceStartup embeddedmode demand
 call :SetServiceStartup fdPHost demand
 call :SetServiceStartup fhsvc demand
 call :SetServiceStartup hidserv demand
@@ -2461,60 +3319,43 @@ call :SetServiceStartup EapHost demand
 call :SetServiceStartup edgeupdate demand
 call :SetServiceStartup edgeupdatem demand
 call :SetServiceStartup EFS demand
-::protectedCOREservice call :SetServiceStartup EntAppSvc demand
 call :SetServiceStartup FDResPub demand
 call :SetServiceStartup Fax demand
 call :SetServiceStartup FrameServer demand
 call :SetServiceStartup FrameServerMonitor demand
 call :SetServiceStartup GraphicsPerfSvc demand
-::deprecated call :SetServiceStartup  HomeGroupListener demand
-::deprecated call :SetServiceStartup  HomeGroupProvider demand
 call :SetServiceStartup HvHost demand
 call :SetServiceStartup IEEtwCollectorService demand
-::omitforEnterprise IPsec and VPN call :SetServiceStartup IKEEXT demand
-::ignored call :SetServiceStartup InstallService demand
 call :SetServiceStartup IpxlatCfgSvc demand
 call :SetServiceStartup lfsvc demand
-::ignored call :SetServiceStartup LicenseManager demand
 call :SetServiceStartup lltdsvc demand
 call :SetServiceStartup lmhosts demand
 call :SetServiceStartup LxpSvc demand
 call :SetServiceStartup McpManagementService demand
-::ignored call :SetServiceStartup MessagingService_* demand
 call :SetServiceStartup MicrosoftEdgeElevationService demand
 call :SetServiceStartup MixedRealityOpenXRSvc demand
 call :SetServiceStartup MSDTC demand
 call :SetServiceStartup MsKeyboardFilter demand
 call :SetServiceStartup MSiSCSI demand
-::protectedCOREservice call :SetServiceStartup msiserver demand
-::ignored call :SetServiceStartup NPSMSvc_* demand
 call :SetServiceStartup NaturalAuthentication demand
 call :SetServiceStartup NcaSvc demand
 call :SetServiceStartup NcbService demand
 call :SetServiceStartup NcdAutoSetup demand
 call :SetServiceStartup NetSetupSvc demand
 call :SetServiceStartup Netman demand
-::protectedCOREservice call :SetServiceStartup NgcCtnrSvc demand
-::protectedCOREservice call :SetServiceStartup NgcSvc demand
-::omitforENTERPRISE call :SetServiceStartup NlaSvc demand
-::omitforENTERPRISE call :SetServiceStartup netprofm demand
 call :SetServiceStartup p2pimsvc demand
 call :SetServiceStartup p2psvc demand
-::ignored call :SetServiceStartup P9RdrService_* demand
 call :SetServiceStartup PcaSvc demand
 call :SetServiceStartup PeerDistSvc demand
-::ignored call :SetServiceStartup PenService_* demand
 call :SetServiceStartup perceptionsimulation demand
 call :SetServiceStartup PerfHost demand
 call :SetServiceStartup PhoneSvc demand
-::ignored call :SetServiceStartup PimIndexMaintenanceSvc_* demand
 call :SetServiceStartup pla demand
 call :SetServiceStartup PlugPlay demand
 call :SetServiceStartup PNRPAutoReg demand
 call :SetServiceStartup PNRPsvc demand
 call :SetServiceStartup PolicyAgent demand
 call :SetServiceStartup PrintNotify demand
-::ignored call :SetServiceStartup PrintWorkflowUserSvc_* demand
 call :SetServiceStartup PushToInstall demand
 call :SetServiceStartup QWAVE demand
 call :SetServiceStartup RasAuto demand
@@ -2531,7 +3372,6 @@ call :SetServiceStartup SEMgrSvc demand
 call :SetServiceStartup SensorDataService demand
 call :SetServiceStartup SensorService demand
 call :SetServiceStartup SensrSvc demand
-::omitforENTERPRISE RDP call :SetServiceStartup SessionEnv demand
 call :SetServiceStartup SharedAccess demand
 call :SetServiceStartup SharedRealitySvc demand
 call :SetServiceStartup shpamsvc demand
@@ -2545,28 +3385,19 @@ call :SetServiceStartup StiSvc demand
 call :SetServiceStartup StorSvc demand
 call :SetServiceStartup svsvc demand
 call :SetServiceStartup swprv demand
-::sysmain alphabetical placeholder
 call :SetServiceStartup TabletInputService demand
 call :SetServiceStartup TapiSrv demand
 call :SetServiceStartup TieringEngineService demand
 call :SetServiceStartup TimeBroker demand
-::protectedCOREservice call :SetServiceStartup TimeBrokerSvc demand
-::omitforENTERPRISE call :SetServiceStartup TokenBroker demand
 call :SetServiceStartup TroubleshootingSvc demand
 call :SetServiceStartup tzautoupdate demand
 call :SetServiceStartup UI0Detect demand
-::ignored call :SetServiceStartup UdkUserSvc_* demand
-::omitforENTERPRISE RDP call :SetServiceStartup UmRdpService demand
-::ignored call :SetServiceStartup UnistoreSvc_* demand
-::ignored call :SetServiceStartup UserDataSvc_* demand
-::omitforENTERPRISE call :SetServiceStartup UsoSvc demand
 call :SetServiceStartup upnphost demand
 call :SetServiceStartup VacSvc demand
 call :SetServiceStartup vds demand
 call :SetServiceStartup vmicguestinterface demand
 call :SetServiceStartup vmicheartbeat demand
 call :SetServiceStartup vmickvpexchange demand
-::omitforENTERPRISE RDP call :SetServiceStartup vmicrdv demand
 call :SetServiceStartup vmicshutdown demand
 call :SetServiceStartup vmictimesync demand
 call :SetServiceStartup vmicvmsession demand
@@ -2576,7 +3407,6 @@ call :SetServiceStartup WalletService demand
 call :SetServiceStartup wbengine demand
 call :SetServiceStartup WcsPlugInService demand
 call :SetServiceStartup wcncsvc demand
-::protectedCOREservice call :SetServiceStartup WdNisSvc demand
 call :SetServiceStartup WdiServiceHost demand
 call :SetServiceStartup WdiSystemHost demand
 call :SetServiceStartup WebClient demand
@@ -2586,8 +3416,6 @@ call :SetServiceStartup WEPHOSTSVC demand
 call :SetServiceStartup WerSvc demand
 call :SetServiceStartup WFDSConMgrSvc demand
 call :SetServiceStartup WiaRpc demand
-::protectedCOREservice call :SetServiceStartup WinHttpAutoProxySvc demand
-::omitforENTERPRISE call :SetServiceStartup WinRM demand
 call :SetServiceStartup wisvc demand
 call :SetServiceStartup wlidsvc demand
 call :SetServiceStartup wlpasvc demand
@@ -2596,81 +3424,131 @@ call :SetServiceStartup WMPNetworkSvc demand
 call :SetServiceStartup WManSvc demand
 call :SetServiceStartup WPDBusEnum demand
 call :SetServiceStartup WpcMonSvc demand
-::omitforENTERPRISE call :SetServiceStartup WpnService demand
 call :SetServiceStartup workfolderssvc demand
-::deprecated call :SetServiceStartup  WSService demand
 call :SetServiceStartup wuauserv demand
 call :SetServiceStartup XblAuthManager demand
 call :SetServiceStartup XblGameSave demand
 call :SetServiceStartup XboxGipSvc demand
 call :SetServiceStartup XboxNetApiSvc demand
-ECHO.
+::protectedCOREservice call :SetServiceStartup AppIDSvc demand
+::ignored call :SetServiceStartup BcastDVRUserService_* demand
+::ignored call :SetServiceStartup BluetoothUserService_* demand
+::deprecated call :SetServiceStartup 'Browser' demand
+::ignored call :SetServiceStartup CaptureService_* demand
+::ignored call :SetServiceStartup cbdhsvc_* demand
+::deprecated call :SetServiceStartup CDPSvc demand
+::protectedCOREservice call :SetServiceStartup ClipSVC demand
+::ignored call :SetServiceStartup ConsentUxUserSvc_* demand
+::ignored call :SetServiceStartup CredentialEnrollmentManagerUserSvc_* demand
+::ignored call :SetServiceStartup DeviceAssociationBroker_* demand
+::ignored call :SetServiceStartup DevicePickerUserSvc_* demand
+::ignored call :SetServiceStartup DevicesFlowUserSvc_* demand
+::protectedCOREservice call :SetServiceStartup DoSvc demand
+::protectedCOREservice call :SetServiceStartup embeddedmode demand
+::protectedCOREservice call :SetServiceStartup EntAppSvc demand
+::deprecated call :SetServiceStartup  HomeGroupListener demand
+::deprecated call :SetServiceStartup  HomeGroupProvider demand
+::omitforEnterprise IPsec and VPN call :SetServiceStartup IKEEXT demand
+::ignored call :SetServiceStartup InstallService demand
+::ignored call :SetServiceStartup LicenseManager demand
+::ignored call :SetServiceStartup MessagingService_* demand
+::protectedCOREservice call :SetServiceStartup msiserver demand
+::ignored call :SetServiceStartup NPSMSvc_* demand
+::protectedCOREservice call :SetServiceStartup NgcCtnrSvc demand
+::protectedCOREservice call :SetServiceStartup NgcSvc demand
+::omitforENTERPRISE call :SetServiceStartup NlaSvc demand
+::omitforENTERPRISE call :SetServiceStartup netprofm demand
+::ignored call :SetServiceStartup P9RdrService_* demand
+::ignored call :SetServiceStartup PenService_* demand
+::ignored call :SetServiceStartup PimIndexMaintenanceSvc_* demand
+::ignored call :SetServiceStartup PrintWorkflowUserSvc_* demand
+::omitforENTERPRISE RDP call :SetServiceStartup SessionEnv demand
+::protectedCOREservice call :SetServiceStartup TimeBrokerSvc demand
+::omitforENTERPRISE call :SetServiceStartup TokenBroker demand
+::ignored call :SetServiceStartup UdkUserSvc_* demand
+::omitforENTERPRISE RDP call :SetServiceStartup UmRdpService demand
+::ignored call :SetServiceStartup UnistoreSvc_* demand
+::ignored call :SetServiceStartup UserDataSvc_* demand
+::omitforENTERPRISE call :SetServiceStartup UsoSvc demand
+::omitforENTERPRISE RDP call :SetServiceStartup vmicrdv demand
+::protectedCOREservice call :SetServiceStartup WdNisSvc demand
+::protectedCOREservice call :SetServiceStartup WinHttpAutoProxySvc demand
+::omitforENTERPRISE call :SetServiceStartup WinRM demand
+::omitforENTERPRISE call :SetServiceStartup WpnService demand
+::deprecated call :SetServiceStartup  WSService demand
 call :LOG Done with manual services
+ECHO.
+
 :windowsserviceauto
 ECHO.
 call :LOG Ensuring required services are set to automatic State
 call :LOG This is just in case you used a previous utility that set the services incorrectly
 call :SetServiceStartup AudioEndpointBuilder auto
 call :SetServiceStartup AudioSrv auto
-::protectedCOREservice call :SetServiceStartup BFE auto
-::protectedCOREservice call :SetServiceStartup BrokerInfrastructure auto
 call :SetServiceStartup BthHFSrv auto
-::ignored call :SetServiceStartup CDPUserSvc_* auto
-::protectedCOREservice call :SetServiceStartup CoreMessagingRegistrar auto
 call :SetServiceStartup CryptSvc auto
 call :SetServiceStartup DPS auto
-::protectedCOREservice call :SetServiceStartup DcomLaunch auto
 call :SetServiceStartup Dhcp auto
 call :SetServiceStartup DispBrokerDesktopSvc auto
-::protectedCOREservice call :SetServiceStartup Dnscache auto
 call :SetServiceStartup dusmsvc auto
 call :SetServiceStartup EventLog auto
 call :SetServiceStartup EventSystem auto
 call :SetServiceStartup FontCache auto
-::protectedCOREservice call :SetServiceStartup gpsvc auto
 call :SetServiceStartup iphlpsvc auto
-::protectedCOREservice call :SetServiceStartup LSM auto
 call :SetServiceStartup LanmanServer auto
 call :SetServiceStartup LanmanWorkstation auto
-::protectedCOREservice call :SetServiceStartup MpsSvc auto
 call :SetServiceStartup nsi auto
-::ignored call :SetServiceStartup OneSyncSvc_* auto
 call :SetServiceStartup Power auto
 call :SetServiceStartup ProfSvc auto
-::protectedCOREservice call :SetServiceStartup RpcEptMapper auto
-::protectedCOREservice call :SetServiceStartup RpcSs auto
-::omitforENTERPRISE call :SetServiceStartup RemoteAccess auto
-::omitforENTERPRISE call :SetServiceStartup RemoteRegistry auto
 call :SetServiceStartup SENS auto
 call :SetServiceStartup SamSs auto
-::protectedCOREservice call :SetServiceStartup Schedule auto
 call :SetServiceStartup ShellHWDetection auto
 call :SetServiceStartup Spooler auto
-::protectedCOREservice call :SetServiceStartup sppsvc auto
-::protectedCOREservice call :SetServiceStartup SystemEventsBroker auto
 call :SetServiceStartup Themes auto
 call :SetServiceStartup tiledatamodelsvc auto
 call :SetServiceStartup TrkWks auto
 call :SetServiceStartup uhssvc auto
 call :SetServiceStartup UserManager auto
 call :SetServiceStartup Wcmsvc auto
-::ignore due to possible conflict with third-party antivitus call :SetServiceStartup WinDefend auto
 call :SetServiceStartup Winmgmt auto
 call :SetServiceStartup WlanSvc auto
+::protectedCOREservice call :SetServiceStartup BFE auto
+::protectedCOREservice call :SetServiceStartup BrokerInfrastructure auto
+::ignored call :SetServiceStartup CDPUserSvc_* auto
+::protectedCOREservice call :SetServiceStartup CoreMessagingRegistrar auto
+::protectedCOREservice call :SetServiceStartup DcomLaunch auto
+::protectedCOREservice call :SetServiceStartup Dnscache auto
+::protectedCOREservice call :SetServiceStartup gpsvc auto
+::protectedCOREservice call :SetServiceStartup LSM auto
+::protectedCOREservice call :SetServiceStartup MpsSvc auto
+::ignored call :SetServiceStartup OneSyncSvc_* auto
+::protectedCOREservice call :SetServiceStartup RpcEptMapper auto
+::protectedCOREservice call :SetServiceStartup RpcSs auto
+::omitforENTERPRISE call :SetServiceStartup RemoteAccess auto
+::omitforENTERPRISE call :SetServiceStartup RemoteRegistry auto
+::protectedCOREservice call :SetServiceStartup Schedule auto
+::protectedCOREservice call :SetServiceStartup sppsvc auto
+::protectedCOREservice call :SetServiceStartup SystemEventsBroker auto
+::ignore due to possible conflict with third-party antivitus call :SetServiceStartup WinDefend auto
 ::ignored call :SetServiceStartup WpnUserService_* auto
-ECHO.
-:windowsservicedelayed-auto
-Call :LOG "Changing less essential services to delayed-auto"
-call :SetServiceStartup BITS delayed-auto
-::omit call :SetServiceStartup MapsBroker delayed-auto
-::protectedCOREservice call :SetServiceStartup SecurityHealthService delayed-auto
-call :SetServiceStartup W32Time delayed-auto
-call :SetServiceStartup WSearch delayed-auto
-::protectedCOREservice call :SetServiceStartup wscsvc delayed-auto
-call :SetServiceStartup wudfsvc delayed-auto
+call :LOG Auto services complete
 ECHO.
 
+:windowsservicedelayedauto
+call :LOG DEBUG: DelayedAuto services started
+Call :LOG Changing less essential services to delayed-auto
+call :SetServiceStartup BITS delayed-auto
+call :SetServiceStartup W32Time delayed-auto
+call :SetServiceStartup WSearch delayed-auto
+call :SetServiceStartup wudfsvc delayed-auto
+::omit call :SetServiceStartup MapsBroker delayed-auto
+::protectedCOREservice call :SetServiceStartup SecurityHealthService delayed-auto
+::protectedCOREservice call :SetServiceStartup wscsvc delayed-auto
+ECHO.
+call :LOG DEBUG: Delayed-Auto services complete
+
 call :ApplyServiceStartupPlan
+call :LOG DEBUG: entered applyservicestartup plan
 set "ServiceBatchRC=!ERRORLEVEL!"
 
 if "!ServiceBatchRC!"=="0" (
@@ -2687,7 +3565,7 @@ ECHO.
 call :LOG ********************************************************************************
 call :LOG        Enabling System-wide Registry Improvements
 call :LOG ********************************************************************************
-call :LOG 
+echo(
 
 call :LOG Disabling network throttling
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" "REG_DWORD" "0xffffffff" "NetworkThrottlingIndex"
@@ -2995,6 +3873,11 @@ goto UserRegistryDeployment
 :: PER USER REGISTRY KEYS TO APPLY - This section applies registry tweaks
 :: This will loop through each existing user account on the pc and apply the registry settings below 
 
+:ResetProfileCounters
+set "TBOK_PROFILE_APPLIED=0"
+set "TBOK_PROFILE_SKIPPED=0"
+set "TBOK_PROFILE_FAILED=0"
+exit /b 0
 
 :ApplySettings
 call :LOG ========= Apply Tweaks to User Registry Hives and Default ==============
@@ -3208,6 +4091,11 @@ call :SetRegistryValueQuiet "%BASE%\Control Panel\Accessibility\StickyKeys" "Fla
 ::call :SetRegistryValueQuiet "%BASE%\System\GameConfigStore" "GameDVR_EFSEFeatureFlags" "REG_DWORD" "0" "GameDVR_EFSEFeatureFlags for %BASE%"
 
 set "BASE="
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    if not "!TBOK_PROFILE_FAILED!"=="0" (
+        exit /b 1
+    )
+)
 exit /b 0
 
 ::********************************END of USER REGISTRY SETTINGS TO APPLY********************************
@@ -3234,18 +4122,47 @@ endlocal & exit /b %ProfileLoadedRC%
 
 :UserRegistryDeployment
 call :LOG Starting per-user registry deployment...
-
+if not defined TBOK_PROFILE_SETTINGS_LISTED (
+    call :LOG ===========================================================
+    call :LOG Applying User Registry Policy Set
+    call :LOG ===========================================================
+    call :LOG Explorer and folder-view behavior
+    call :LOG Taskbar and Start menu preferences
+    call :LOG Search and Bing integration
+    call :LOG Background application controls
+    call :LOG Gaming and Game Mode preferences
+    call :LOG Visual effects and menu responsiveness
+    call :LOG Advertising and content-delivery controls
+    call :LOG Copilot and cross-device controls
+    call :LOG Microsoft Office telemetry and logging
+    call :LOG Accessibility hotkey preferences
+    call :LOG ===========================================================
+    set "TBOK_PROFILE_SETTINGS_LISTED=1"
+)
 :: ================================
 :: 1. CURRENTLY LOADED USERS
 :: ================================
 call :LOG Processing loaded user hives
 set "LoadedUserHiveCount=0"
+set "LoadedUserSettingsRC="
 
 for /f "delims=" %%U in ('REG query HKEY_USERS 2^>nul ^| findstr /B /I /L /C:"HKEY_USERS\S-1-5-21-" /C:"HKEY_USERS\S-1-12-1-" ^| findstr /V /I /C:"_Classes"') do (
     set /a "LoadedUserHiveCount+=1"
+
+    call :ResetProfileCounters
+    set "TBOK_PROFILE_SUMMARY_MODE=1"
+
     call :ApplySettings "%%U"
     set "LoadedUserSettingsRC=!ERRORLEVEL!"
-        if not "!LoadedUserSettingsRC!"=="0" (
+
+    set "TBOK_PROFILE_SUMMARY_MODE="
+
+    call :LOG PROFILE SUMMARY: %%U
+    call :LOG     Applied : !TBOK_PROFILE_APPLIED!
+    call :LOG     Skipped : !TBOK_PROFILE_SKIPPED!
+    call :LOG     Failed  : !TBOK_PROFILE_FAILED!
+
+    if not "!LoadedUserSettingsRC!"=="0" (
         call :LOG WARNING: ApplySettings did not complete for loaded hive %%U. Exit code: !LoadedUserSettingsRC!.
     )
 )
@@ -3331,8 +4248,15 @@ for /f "delims=" %%D in ('dir /b /ad "%SystemDrive%\Users" 2^>nul ^| findstr /V 
                             call :LOG WARNING: A registry-native hive backup could not be created for !PROFILE_PATH!.
                         )
 
+                        call :ResetProfileCounters
+                        set "TBOK_PROFILE_SUMMARY_MODE=1"
                         call :ApplySettings "HKU\TempHive"
                         set "ProfileSettingsRC=!ERRORLEVEL!"
+                        set "TBOK_PROFILE_SUMMARY_MODE="
+                        call :LOG PROFILE SUMMARY: !PROFILE_PATH!
+                        call :LOG     Applied : !TBOK_PROFILE_APPLIED!
+                        call :LOG     Skipped : !TBOK_PROFILE_SKIPPED!
+                        call :LOG     Failed  : !TBOK_PROFILE_FAILED!
 
                         REG unload "HKU\TempHive" >>"%LOGFILE%" 2>&1
                         set "ProfileUnloadRC=!ERRORLEVEL!"
@@ -3409,8 +4333,15 @@ if exist "%SystemDrive%\Users\Default\NTUSER.DAT" (
     ) else (
         call :SaveMountedHiveBackup HKU\DefaultHive Default-NTUSER-SavedHive.dat "the Default profile"
 
+        call :ResetProfileCounters
+        set "TBOK_PROFILE_SUMMARY_MODE=1"
         call :ApplySettings "HKU\DefaultHive"
         set "DefaultSettingsRC=!ERRORLEVEL!"
+        set "TBOK_PROFILE_SUMMARY_MODE="
+        call :LOG PROFILE SUMMARY: Default Profile
+        call :LOG     Applied : !TBOK_PROFILE_APPLIED!
+        call :LOG     Skipped : !TBOK_PROFILE_SKIPPED!
+        call :LOG     Failed  : !TBOK_PROFILE_FAILED!
 
         REG unload "HKU\DefaultHive" >>"%LOGFILE%" 2>&1
         set "DefaultHiveUnloadRC=!ERRORLEVEL!"
@@ -3436,8 +4367,15 @@ exit /b 0
 ::======================================END FOR EACH USER REGISTRY LOOP==========================================
 
 :GamingTweaks
-if not defined CHASSISTYPE (
-    call :GetChassisType
+if not defined TBOK_POWERPLAN_POLICY (
+    call :GetSystemProfile
+    if errorlevel 1 (
+        call :LOG WARNING: The hardware profile could not be completed for Gaming.
+    )
+    call :ResolveSystemPolicy
+    if errorlevel 1 (
+        call :LOG WARNING: The Gaming power policy could not be resolved.
+    )
 )
 
 call :LOG ****************************************************************
@@ -3496,54 +4434,22 @@ call :SetRegistryValueQuiet "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\M
 ::The Latency Sensitive value is defaulted to TRUE - this key is here to ensure defaults
 call :SetRegistryValueQuiet "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive" "REG_SZ" "True" "Latency Sensitive"
 
-:detectchassisGamingTweaks
 call :LOG Detected chassis category: !CHASSISTYPE!
+call :LOG Resolved Gaming power-plan policy: !TBOK_POWERPLAN_POLICY!
 
-if /i "!CHASSISTYPE!"=="Laptop" goto laptopgaming
-if /i "!CHASSISTYPE!"=="Desktop" goto desktopgaming
-goto unknownchassisgaming
+if /I "!TBOK_POWERPLAN_POLICY!"=="Current" goto :laptopgaming
+if /I "!TBOK_POWERPLAN_POLICY!"=="Ultimate Performance" goto :desktopgaming
+goto :unknownchassisgaming
 
 :laptopgaming
 call :LOG Laptop detected - desktop-only power tweaks were skipped.
 
-call :LOG Unlocking all hidden Power Plan attributes
-
-set "TBOK_POWER_UNLOCK=%TEMP%\TBOK-PowerUnlock-%RANDOM%-%RANDOM%.ps1"
-
-(
-echo $keys = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue
-echo foreach ^($key in $keys^) ^{
-echo     try ^{
-echo         if ^($key.Name -notmatch 'DefaultPowerSchemeValues'^) ^{
-echo             Set-ItemProperty -Path $key.PSPath -Name Attributes -Value 2 -Force -ErrorAction SilentlyContinue
-echo         ^}
-echo     ^}
-echo     catch ^{
-echo     ^}
-echo ^}
-) > "!TBOK_POWER_UNLOCK!"
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "!TBOK_POWER_UNLOCK!" >>"%LOGFILE%" 2>&1
-
-set "PowerUnlockRC=!ERRORLEVEL!"
-
-if exist "!TBOK_POWER_UNLOCK!" (
-    del /q "!TBOK_POWER_UNLOCK!" >nul 2>&1
+call :UnlockHiddenPowerSettings
+if errorlevel 1 (
+    call :LOG WARNING: Gaming continued without completing the global power-setting unlock.
 )
 
-if not "!PowerUnlockRC!"=="0" (
-    call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
-) else (
-    call :LOG Hidden power-plan settings unlocked successfully.
-)
-
-
-Call :LOG Activating Processor Performance Boost Mode 3 for Efficient Agressive
-powercfg -attributes sub_processor perfboostmode -attrib_hide
-powercfg -q scheme_current sub_processor perfboostmode
-powercfg -s scheme_current
-powercfg -setdcvalueindex scheme_current sub_processor perfboostmode 3
-powercfg -s scheme_current
+call :ConfigureProcessorBoostMode 3 3 "Efficient Aggressive"
 
 goto :GamingTweaksComplete
 
@@ -3590,46 +4496,14 @@ if not defined ULTIMATE_GUID (
         call :LOG Ultimate Performance plan activated: !ULTIMATE_GUID!
     )
 )
-Call :LOG Activating Processor Performance Boost Mode 2 for Aggressive at Guaranteed
-powercfg -attributes sub_processor perfboostmode -attrib_hide
-powercfg -q scheme_current sub_processor perfboostmode
-powercfg -s scheme_current
-powercfg -setdcvalueindex scheme_current sub_processor perfboostmode 2
-powercfg -s scheme_current
+call :ConfigureProcessorBoostMode 2 2 "Aggressive at Guaranteed"
 
-call :LOG Unlocking all hidden Power Plan attributes
-
-set "TBOK_POWER_UNLOCK=%TEMP%\TBOK-PowerUnlock-%RANDOM%-%RANDOM%.ps1"
-
-(
-echo $keys = Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings' -Recurse -ErrorAction SilentlyContinue
-echo foreach ^($key in $keys^) ^{
-echo     try ^{
-echo         if ^($key.Name -notmatch 'DefaultPowerSchemeValues'^) ^{
-echo             Set-ItemProperty -Path $key.PSPath -Name Attributes -Value 2 -Force -ErrorAction SilentlyContinue
-echo         ^}
-echo     ^}
-echo     catch ^{
-echo     ^}
-echo ^}
-) > "!TBOK_POWER_UNLOCK!"
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "!TBOK_POWER_UNLOCK!" >>"%LOGFILE%" 2>&1
-
-set "PowerUnlockRC=!ERRORLEVEL!"
-
-if exist "!TBOK_POWER_UNLOCK!" (
-    del /q "!TBOK_POWER_UNLOCK!" >nul 2>&1
-)
-
-if not "!PowerUnlockRC!"=="0" (
-    call :LOG WARNING: Failed to unlock one or more hidden power settings. Exit code: !PowerUnlockRC!.
-) else (
-    call :LOG Hidden power-plan settings unlocked successfully.
+call :UnlockHiddenPowerSettings
+if errorlevel 1 (
+    call :LOG WARNING: Gaming continued without completing the global power-setting unlock.
 )
 
 set "ULTIMATE_GUID="
-
 goto :GamingTweaksComplete
 
 :unknownchassisgaming
@@ -3640,7 +4514,7 @@ goto :GamingTweaksComplete
 call :LOG ****************************************************************
 call :LOG Completed Gaming Improvements
 call :LOG ****************************************************************
-call :LOG
+echo(
 exit /b 0
 
 :WinGet
@@ -3756,14 +4630,34 @@ call :LOG Configuring and Running Enhanced DiskCleanup routine
 	REG ADD "%_RootKey%\Windows Upgrade Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
 call :LOG Disk Cleanup registry settings completed.
 call :LOG Running Windows Disk Cleanup. This can take a while.
+call :LOG CleanMgr timeout is 30 minutes.
 
-start "" /wait cleanmgr.exe /sagerun:69 >>"%LOGFILE%" 2>&1
+start "" cleanmgr.exe /sagerun:69
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+"$timeoutSeconds = 1800;" ^
+"$stopWatch = [Diagnostics.Stopwatch]::StartNew();" ^
+"while ($stopWatch.Elapsed.TotalSeconds -lt $timeoutSeconds) {" ^
+"    $cleanMgr = Get-Process -Name cleanmgr -ErrorAction SilentlyContinue;" ^
+"    if ($null -eq $cleanMgr) { exit 0 };" ^
+"    Start-Sleep -Seconds 5;" ^
+"};" ^
+"$cleanMgr = Get-Process -Name cleanmgr -ErrorAction SilentlyContinue;" ^
+"if ($cleanMgr) {" ^
+"    $cleanMgr | Stop-Process -Force -ErrorAction SilentlyContinue;" ^
+"    exit 2;" ^
+"};" ^
+"exit 0" >nul 2>&1
+
 set "CleanMgrRC=!ERRORLEVEL!"
 
-if not "!CleanMgrRC!"=="0" (
-    call :LOG WARNING: Disk Cleanup returned exit code !CleanMgrRC!.
-) else (
+if "!CleanMgrRC!"=="0" (
     call :LOG Disk Cleanup completed successfully.
+) else if "!CleanMgrRC!"=="2" (
+    call :LOG WARNING: Disk Cleanup exceeded the 30 minute timeout.
+    call :LOG WARNING: CleanMgr was terminated and processing will continue.
+) else (
+    call :LOG WARNING: Disk Cleanup returned exit code !CleanMgrRC!.
 )
 
 call :LOG Cleaning superseded Windows component-store versions.
@@ -3785,15 +4679,15 @@ if not "!ComponentCleanupRC!"=="0" exit /b 1
 
 call :LOG BeardSweeper cleanup completed successfully.
 exit /b 0
-exit /b 0
 
 :Finished
-call :LOG ****************************ALL FINISHED!******************************
+call :LOG ***********************ALL FINISHED!***********************
 call :LOG .
-call :LOG .    IF THIS SCRIPT HELPED YOU OUT - CONSIDER BUYING ME A COFFEE
-call :LOG .         "https://buymeacoffee.com/thebeardofl"
+call :LOG .              IF THIS SCRIPT HELPED YOU OUT
+call :LOG .               CONSIDER BUYING ME A COFFEE
+call :LOG .          "https://buymeacoffee.com/thebeardofl"
 call :LOG .
-call :LOG ****************************ALL FINISHED!******************************
+call :LOG ***********************ALL FINISHED!***********************
 
 if defined TBOK_NONINTERACTIVE (
     if defined TBOK_RUN_RESTART (
@@ -3844,6 +4738,6 @@ exit /b 0
 :EXIT
 call :LOG Script exiting.
 call :CleanupTemporaryPlans
-endlocal
 call :Delay 10
+endlocal
 exit /b 0
