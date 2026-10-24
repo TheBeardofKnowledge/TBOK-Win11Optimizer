@@ -4381,7 +4381,6 @@ if not defined TBOK_POWERPLAN_POLICY (
 call :LOG ****************************************************************
 call :LOG        Begin Gaming Improvements        
 call :LOG **********************************************************
-call :LOG 
 
 call :RequireRollbackProtection "Gaming optimization changes"
 if errorlevel 1 (
