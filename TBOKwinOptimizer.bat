@@ -1,3 +1,4 @@
+:: Requirements - Windows 10 or Windows 11 with Windows PowerShell 5.1
 :: Hello - if youre reading this its because you dont just blindly apply scripts "willy nilly"
 :: You want to know the meat and potatoes of what its doing - NO "TRUST ME BRO" LOGIC
 :: I respect that, and honestly, it's the only way you should run a script you didn't make
@@ -14,21 +15,21 @@
 :: If you have an issue or want to request a feature, please request it on GitHub
 :: If you want to learn more about each command, use what I use learn.microsoft.com
 :: READY... Lets go
-:: FYI you can now run this script on remote computer using the following switches for a menuless run":
-:: /optimize - runs the main routine to optimize and debloat 
-:: /cleanup - Agressive disk cleanup using my BeardSweeper script
-:: /gaming - apply gaming tweaks 
-:: /winget - full auto software update using WinGet
-:: /newlog - starts a new log file for the workstation being run on, if not it will reuse existing
-:: /restart - restarts the computer after all requested noninteractive operations complete
-:: /remote COMPUTERNAME - copies TBOK to the remote workstation and executes the requested
-::  noninteractive operations there, retrieves logs to the local script directory,
-::  and processes /RESTART only after artifact retrieval completes
-:: /remotelist FILE - sequentially runs the requested operations on each
+:: FYI you can now run this script on remote computer using the following switches for a menuless run:
+::   /optimize - runs the main routine to optimize and debloat 
+::   /cleanup - Agressive disk cleanup using my BeardSweeper script
+::   /gaming - apply gaming tweaks 
+::   /winget - full auto software update using WinGet
+::   /newlog - starts a new log file for the workstation being run on, if not it will reuse existing
+::   /restart - restarts the computer after all requested noninteractive operations complete
+::   /remote COMPUTERNAME - copies TBOK to the remote workstation and executes the requested
+::    noninteractive operations there, retrieves logs to the local script directory,
+::    and processes /RESTART only after artifact retrieval completes
+::   /remotelist FILE - sequentially runs the requested operations on each
 :: computer listed in FILE. One computer name per line. Blank lines and
 :: lines beginning with # are ignored.
 :: Example:
-:: TBOKwinOptimizer-V1-7-0.bat /OPTIMIZE /RESTART /REMOTELIST computers.txt
+:: TBOKwinOptimizer-Vx-x-x.bat /OPTIMIZE /CLEANUP /RESTART /REMOTELIST computers.txt
 ::   Requirements for /remote and /Remotelist: 
 ::   The destination must accept WS-Management remoting connections
 ::   The source computer account must have administrative rights on the remote computer
@@ -70,16 +71,26 @@ set "CLR_WHITE=%ESC%[97m"
 
 ::Script release version and release date 
 :ScriptVersion
-set "VERSION=1.7.0"
-set "VERDATE=10-23-2026"
+set "VERSION=1.7.1"
+set "VERDATE=10-28-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
 cls
-echo No changes are being made at this time.
+echo Checking for Admin permissions using fltmc, No changes are being made at this time.
 
 "%SystemRoot%\System32\fltmc.exe" >nul 2>&1
 if not errorlevel 1 goto :GotPrivileges
+
+::verify that powershell has not been removed
+if not exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" (
+    echo.
+    echo ERROR: Windows PowerShell is unavailable.
+    echo TBOK requires Windows PowerShell 5.1 or later.
+    echo.
+    pause
+    exit /b 1
+)
 
 echo Requesting administrative elevation...
 
@@ -87,7 +98,7 @@ set "ELEVATE_SCRIPT=%~f0"
 set "ELEVATE_WORKDIR=%~dp0"
 set "ELEVATE_ARGUMENTS=%*"
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -Command ^
     "try {" ^
     "    $quote = [char]34;" ^
     "    $batchCommand = $quote + $env:ELEVATE_SCRIPT + $quote;" ^
@@ -114,12 +125,24 @@ if not "%ELEVATE_RC%"=="0" (
     echo When using PowerShell remoting, start the session with sufficient administrative rights.
     exit /b 1
 )
-
 exit /b 0
 
 :GotPrivileges
 ECHO Script elevated successfully
+
+call :CheckPowerShellRequirements
+
+if errorlevel 1 (
+    echo.
+    echo ERROR: TBOK requires Windows PowerShell 5.1 or later.
+    echo ERROR: One or more required Windows PowerShell capabilities are unavailable.
+    echo.
+    pause
+    exit /b 1
+)
 ECHO Analyzing System to create optimized plan, please wait...
+call :ShowAnalysisProgress 0 "Starting system analysis"
+
 :BEGIN-SCRIPT-HELPERS
 ::These are items that are called later in the script to perform a function - trims the code size for repeat items
 ::enable extended script logic and delayed expansion
@@ -205,9 +228,11 @@ goto :Switches
 
 :Log
 :: Echoes to the console and logfile.
+:: During analysis-progress mode, normal messages are logged but not echoed.
 :: During profile-summary mode, routine messages are suppressed while
 :: ERROR and WARNING messages remain visible.
 setlocal DisableDelayedExpansion
+
 set "LogMessage=%*"
 set "LogMessageType=%LogMessage:~0,8%"
 
@@ -218,6 +243,11 @@ if defined TBOK_PROFILE_SUMMARY_MODE (
             exit /b 0
         )
     )
+)
+if defined TBOK_ANALYSIS_PROGRESS_ACTIVE (
+    >>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
+    endlocal
+    exit /b 0
 )
 echo(%LogMessage%
 >>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
@@ -278,6 +308,36 @@ set "TBOK_ARGUMENT_ERROR=1"
 shift
 goto :ParseNextArgument
 
+:ShowAnalysisProgress
+setlocal DisableDelayedExpansion
+
+set "ProgressPercent=%~1"
+set "ProgressText=%~2"
+set "ProgressBar="
+
+if not defined ProgressPercent set "ProgressPercent=0"
+
+if %ProgressPercent% GEQ 10 set "ProgressBar=#"
+if %ProgressPercent% GEQ 20 set "ProgressBar=##"
+if %ProgressPercent% GEQ 30 set "ProgressBar=###"
+if %ProgressPercent% GEQ 40 set "ProgressBar=####"
+if %ProgressPercent% GEQ 50 set "ProgressBar=#####"
+if %ProgressPercent% GEQ 60 set "ProgressBar=######"
+if %ProgressPercent% GEQ 70 set "ProgressBar=#######"
+if %ProgressPercent% GEQ 80 set "ProgressBar=########"
+if %ProgressPercent% GEQ 90 set "ProgressBar=#########"
+if %ProgressPercent% GEQ 100 set "ProgressBar=##########"
+
+set "ProgressBar=%ProgressBar%----------"
+set "ProgressBar=%ProgressBar:~0,10%"
+
+<nul set /p "=%ESC%[2K%ESC%[1G%CLR_STATUS%[%ProgressBar%] %ProgressPercent%%%  %ProgressText%%CLR_RESET%"
+
+if %ProgressPercent% GEQ 100 echo(
+
+endlocal
+exit /b 0
+
 :ArgumentsParsed
 if "!TBOK_ARGUMENT_ERROR!"=="1" (
     call :LOG ERROR: The requested command-line sequence was not started because one or more options were invalid.
@@ -308,6 +368,20 @@ if defined TBOK_RUN_GAMING goto :NonInteractiveSequence
 if defined TBOK_RUN_WINGET goto :NonInteractiveSequence
 goto :MENU
 
+:CheckPowerShellRequirements
+setlocal DisableDelayedExpansion
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$ErrorActionPreference='Stop';$v=$PSVersionTable.PSVersion;if($v -lt [version]'5.1'){exit 11};$edition=$PSVersionTable.PSEdition;if($edition -and $edition -ne 'Desktop'){exit 12};$required=@('Get-CimInstance','Invoke-CimMethod','New-PSSession','Invoke-Command','Copy-Item','Start-Process','Get-Process','Wait-Process');foreach($name in $required){if(-not(Get-Command $name -ErrorAction SilentlyContinue)){Write-Output ('MISSING: '+$name);exit 13}};Write-Output ('Windows PowerShell '+$v.ToString()+' requirement check passed.');exit 0"
+
+set "PowerShellRequirementRC=%ERRORLEVEL%"
+
+if not "%PowerShellRequirementRC%"=="0" (
+    endlocal
+    exit /b %PowerShellRequirementRC%
+)
+
+endlocal
+exit /b 0
 
 :PrepareRollbackProtection
 call :LOG Before anything is modified - creating a system restore point.
@@ -1734,10 +1808,17 @@ exit /b 0
 
 
 :ResolveSystemPolicy
-:: Resolve all hardware-dependent targets
+:: Resolve all hardware-dependent targets only after the hardware profile
+:: has completed successfully.
 if defined TBOK_POLICY_ALREADY_RESOLVED exit /b 0
+if not defined TBOK_SYSTEM_PROFILE_READY (
+    call :LOG ERROR: The complete hardware profile is unavailable.
+    call :LOG Hardware-dependent system policies were not resolved.
+    exit /b 1
+)
 set "TBOK_SYSMAIN_MODE=unchanged"
 set "TBOK_MMAGENT_POLICY=Unchanged"
+set "TBOK_PREFETCH_POLICY=Unchanged"
 set "TBOK_LOW_MEMORY_POLICY=No"
 set "TBOK_HIBERNATION_POLICY=Unchanged"
 set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -1764,16 +1845,31 @@ if /I "!CHASSISTYPE!"=="Laptop" (
     set "TBOK_POWERPLAN_POLICY=Ultimate Performance"
 )
 
-:: Low-memory policy overrides storage type.
+:: Resolve SysMain, MMAgent, and Windows Prefetch policy.
+::
+:: RAM <= 12 GB:
+::   Keep SysMain Automatic so MMAgent remains functional.
+::   Enable the low-memory MMAgent policy.
+::   Use boot prefetch only to reduce application-launch memory pressure.
+::
+:: RAM > 12 GB:
+::   SSD     = SysMain Automatic, boot prefetch only.
+::   HDD     = SysMain Automatic, boot + application prefetch.
+::   Unknown = SysMain and Prefetch left unchanged.
+
 if !TBOK_MEMORY_MB! LEQ 12288 (
     set "TBOK_LOW_MEMORY_POLICY=Yes"
     set "TBOK_MMAGENT_POLICY=Enabled"
     set "TBOK_SYSMAIN_MODE=auto"
+    set "TBOK_PREFETCH_POLICY=2"
 ) else if /I "!TBOK_DRIVETYPE!"=="SSD" (
-    set "TBOK_SYSMAIN_MODE=disabled"
+    set "TBOK_SYSMAIN_MODE=auto"
+    set "TBOK_PREFETCH_POLICY=2"
 ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
-    set "TBOK_SYSMAIN_MODE=demand"
+    set "TBOK_SYSMAIN_MODE=auto"
+    set "TBOK_PREFETCH_POLICY=3"
 )
+
 
 :: Page-file policy.
 if !TBOK_MEMORY_MB! GEQ 32768 (
@@ -1799,9 +1895,11 @@ call :LOG Chassis profile: !CHASSISTYPE!
 call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
 call :LOG SysMain target: !TBOK_SYSMAIN_MODE!
 call :LOG MMAgent target: !TBOK_MMAGENT_POLICY!
+call :LOG Prefetch target: !TBOK_PREFETCH_POLICY!
 call :LOG Hibernation target: !TBOK_HIBERNATION_POLICY!
 call :LOG Page-file target: !TBOK_PAGEFILE_POLICY!
 call :LOG Gaming power-plan target: !TBOK_POWERPLAN_POLICY!
+call :ShowAnalysisProgress 100 "Optimization policy ready"
 set "TBOK_POLICY_ALREADY_RESOLVED=1"
 exit /b 0
 
@@ -2012,20 +2110,28 @@ for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "$ct=@((Get-CimInst
 exit /b
 
 :GetSystemProfile
-:: Helper to build variables required hardware profile for specific scenario optimizations
-if defined TBOK_MEMORY_MB if defined TBOK_DRIVETYPE if defined CHASSISTYPE (
-    exit /b 0
-)
+:: Helper to build variables required hardware profile for specific scenario optimizations.
+:: Cache the profile only after all required detection completed successfully.
+if defined TBOK_SYSTEM_PROFILE_READY exit /b 0
+
 set "SystemProfileFailed=0"
+set "TBOK_SYSTEM_PROFILE_READY="
+call :ShowAnalysisProgress 5 "Initializing hardware profile"
 call :LOG Building hardware profile...
 call :GetInstalledMemory
 set "SystemProfileMemoryRC=!ERRORLEVEL!"
+if "!SystemProfileMemoryRC!"=="0" (
+    call :ShowAnalysisProgress 20 "Installed memory detected"
+) else (
+    call :ShowAnalysisProgress 20 "Memory detection incomplete"
+)
 if not "!SystemProfileMemoryRC!"=="0" (
     set "SystemProfileFailed=1"
     call :LOG WARNING: Installed memory could not be determined.
 )
 
 call :GetChassisType
+call :ShowAnalysisProgress 40 "Chassis profile detected"
 call :LOG Chassis profile: !CHASSISTYPE!
 ::Detect whether the Windows system drive is an HDD or SSD and physical media type 
 set "TBOK_DRIVETYPE=UNKNOWN"
@@ -2033,6 +2139,7 @@ set "DriveDetectRC="
 set "DriveDetectFile=%TEMP%\TBOK-DriveDetect-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
 
 call :LOG Detecting Windows system drive media type...
+call :ShowAnalysisProgress 50 "Analyzing system drive"
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "$ErrorActionPreference = 'Stop';" ^
     "try {" ^
@@ -2109,6 +2216,7 @@ for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"RESULT=" "%DriveDetectFile%
 if /i not "!TBOK_DRIVETYPE!"=="HDD" if /i not "!TBOK_DRIVETYPE!"=="SSD" (
     set "TBOK_DRIVETYPE=UNKNOWN"
 )
+call :ShowAnalysisProgress 75 "System drive profile detected"
 
 :GetSystemProfileCleanup
 if defined DriveDetectFile (
@@ -2118,9 +2226,13 @@ if defined DriveDetectFile (
 )
 call :LOG Storage profile: !TBOK_DRIVETYPE!
 if "!SystemProfileFailed!"=="1" (
+    set "TBOK_SYSTEM_PROFILE_READY="
     set "SystemProfileFailed="
     exit /b 1
 )
+
+call :ShowAnalysisProgress 85 "Hardware profile complete"
+set "TBOK_SYSTEM_PROFILE_READY=1"
 set "SystemProfileFailed="
 exit /b 0
 
@@ -2841,13 +2953,17 @@ exit /b 0
 :END-SCRIPT-HELPERS
 
 :RefreshMenuProfile
-if not defined TBOK_MEMORY_MB (
-    call :GetSystemProfile >nul 2>&1
+set "TBOK_ANALYSIS_PROGRESS_ACTIVE=1"
+
+if not defined TBOK_SYSTEM_PROFILE_READY (
+    call :GetSystemProfile
 )
 
-if defined TBOK_MEMORY_MB (
-    call :ResolveSystemPolicy >nul 2>&1
+if defined TBOK_SYSTEM_PROFILE_READY (
+    call :ResolveSystemPolicy
 )
+
+set "TBOK_ANALYSIS_PROGRESS_ACTIVE="
 
 if not defined TBOK_MEMORY_GB set "TBOK_MEMORY_GB=Unknown"
 if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
@@ -2882,8 +2998,8 @@ echo %CLR_TITLE% *           Version %version% %verdate%                   *
 echo %CLR_TITLE% ********************************************************    ****************************************
 echo %CLR_TITLE% *                                                      *                 Target Config:
 echo %CLR_TITLE% *                                                      *
-echo %CLR_OPTION% *     Please choose:                                   *        Low Ram Policy: !TBOK_LOW_MEMORY_POLICY! 
-echo %CLR_OPTION% *  1. Optimize system *RECOMMENDED                     *        Sysmain target: !TBOK_SYSMAIN_MODE!
+echo %CLR_OPTION% *     Please type the number for option:               *        Low Ram Policy: !TBOK_LOW_MEMORY_POLICY! 
+echo %CLR_OPTION% *  1. Optimize system *START HERE                      *        Sysmain target: !TBOK_SYSMAIN_MODE!
 echo %CLR_OPTION% *  2. Run BeardSweeper Disk Cleanup routine            *        MMAgent target mode: !TBOK_MMAGENT_POLICY!   
 echo %CLR_OPTION% *  3. Apply Gaming Optimizations                       *        VM config target mode: !TBOK_PAGEFILE_POLICY!
 echo %CLR_OPTION% *  4. Update apps using WinGet                         *        Hibernation target mode: !TBOK_HIBERNATION_POLICY!
@@ -2893,7 +3009,7 @@ echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *        
 echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *
 echo %CLR_TITLE% ********************************************************    ****************************************
 echo %CLR_RESET%
-choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 15 seconds): " /t 20 /d 1 2>>"%LOGFILE%"
+choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 30 seconds): " /t 30 /d 1 2>>"%LOGFILE%"
 set "MenuChoiceRC=%ERRORLEVEL%"
 color f0
 if "%MenuChoiceRC%"=="255" (
@@ -3255,19 +3371,18 @@ call :SetServiceStartup UevAgentService disabled
 call :SetServiceStartup ssh-agent disabled
 
 call :LOG Applying the resolved SysMain and MMAgent service policy
-:: TBOK low-memory policy:
-:: Systems with 12 GB or less RAM keep SysMain Automatic and running so
-:: Memory Compression, Page Combining, and the MMAgent workers remain available.
-:: Higher-memory SSD systems disable SysMain.
-:: Higher-memory HDD systems set SysMain to Demand mode.
-:: Higher-memory systems with unknown storage leave SysMain unchanged.
+:: TBOK SysMain and Prefetch policy:
+:: Systems with 12 GB or less RAM keep SysMain Automatic and use boot-only Prefetch.
+:: Higher-memory SSD systems keep SysMain Automatic and use boot-only Prefetch.
+:: Higher-memory HDD systems keep SysMain Automatic and use boot + application Prefetch.
+:: Higher-memory systems with unknown storage leave SysMain and Prefetch unchanged.
 call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
 call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
 call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
 
 if /I "!TBOK_SYSMAIN_MODE!"=="auto" (
-    call :LOG Keeping SysMain Automatic so low-memory MMAgent features remain available.
+    call :LOG Keeping SysMain Automatic according to the resolved system policy.
     call :SetServiceStartup SysMain auto
 ) else if /I "!TBOK_SYSMAIN_MODE!"=="disabled" (
     call :LOG Disabling SysMain on this higher-memory SSD system.
@@ -3535,7 +3650,6 @@ call :LOG Auto services complete
 ECHO.
 
 :windowsservicedelayedauto
-call :LOG DEBUG: DelayedAuto services started
 Call :LOG Changing less essential services to delayed-auto
 call :SetServiceStartup BITS delayed-auto
 call :SetServiceStartup W32Time delayed-auto
@@ -3545,10 +3659,8 @@ call :SetServiceStartup wudfsvc delayed-auto
 ::protectedCOREservice call :SetServiceStartup SecurityHealthService delayed-auto
 ::protectedCOREservice call :SetServiceStartup wscsvc delayed-auto
 ECHO.
-call :LOG DEBUG: Delayed-Auto services complete
 
 call :ApplyServiceStartupPlan
-call :LOG DEBUG: entered applyservicestartup plan
 set "ServiceBatchRC=!ERRORLEVEL!"
 
 if "!ServiceBatchRC!"=="0" (
@@ -3567,6 +3679,14 @@ call :LOG        Enabling System-wide Registry Improvements
 call :LOG ********************************************************************************
 echo(
 
+
+call :LOG Applying resolved Windows Prefetch policy
+if /I "!TBOK_PREFETCH_POLICY!"=="Unchanged" (
+    call :LOG Windows Prefetch configuration was left unchanged.
+) else (
+    call :SetRegistryValue "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" "EnablePrefetcher" "REG_DWORD" "!TBOK_PREFETCH_POLICY!" "Windows EnablePrefetcher"
+)
+
 call :LOG Disabling network throttling
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" "REG_DWORD" "0xffffffff" "NetworkThrottlingIndex"
 
@@ -3577,7 +3697,7 @@ call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" "REG_DWORD" "10" "SystemResponsiveness"
 
 call :LOG Speed up shutdown time
-call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "5000" "WaitToKillServiceTimeout"
+call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "3000" "WaitToKillServiceTimeout"
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
 call :SetAllControlSetValues "Control\FileSystem" "LongPathsEnabled" "REG_DWORD" "1" "LongPathsEnabled"
@@ -4380,7 +4500,8 @@ if not defined TBOK_POWERPLAN_POLICY (
 
 call :LOG ****************************************************************
 call :LOG        Begin Gaming Improvements        
-call :LOG **********************************************************
+call :LOG ****************************************************************
+
 
 call :RequireRollbackProtection "Gaming optimization changes"
 if errorlevel 1 (
@@ -4406,7 +4527,7 @@ if errorlevel 1 (
     call :LOG Removed explicit useplatformclock override.
 )
 
-call :LOG Requesting Hardware Accelerated GPU Scheduling (HAGS) where supported by the installed GPU and driver.
+call :LOG Requesting Hardware Accelerated GPU Scheduling -HAGS- where supported by the installed GPU and driver.
 call :SetRegistryValue "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HWSchMode" "REG_DWORD" "2" "Hardware Accelerated GPU Scheduling mode"
 
 call :LOG Enabling Optimizations for Windowed Games
@@ -4520,7 +4641,7 @@ exit /b 0
 call :LOG CAUTION - WINGET DOES NOT CONTROL PACKAGES WITH REBOOT AUTO ENABLED
 call :LOG CAUTION - RUNNING THIS ON A REMOTE MACHINE COULD REBOOT THE PC AS PART OF THE SOFTWARE UPDATE PROCESS
 call :LOG CAUTION - IT IS DEFAULTED TO NOT REBOOT BUT SOME PACKAGES IGNORE THE REQUEST
-call :LOG CAUTION - MICROSOFT IS "WORKING TO RESOLVE THIS WITH 3RD PARTY PACKAGE MANAGERS"
+call :LOG CAUTION - MICROSOFT IS SUPPOSEDLY WORKING TO RESOLVE THIS WITH 3RD PARTY PACKAGE MANAGERS
 ECHO.
 call :LOG Installing or updating the WinGet Package Manager prerequisites
 
@@ -4549,9 +4670,412 @@ if not "!WinGetUpdateRC!"=="0" (
 call :LOG WinGet application updates completed successfully.
 exit /b 0
 
+
+:BEARDSWEEPERHELPERS
+
+:PrepareApplicationForCleanup
+:: Usage:
+:: call :PrepareApplicationForCleanup "process.exe" "Application Name"
+::
+:: Return codes:
+:: 0 = Cleanup can proceed.
+::     Application was not running, or this is a noninteractive session.
+:: 2 = Interactive session; running application was terminated successfully.
+:: 3 = Interactive session; application could not be terminated.
+setlocal DisableDelayedExpansion
+
+set "CleanupProcess=%~1"
+set "CleanupApplication=%~2"
+
+if not defined CleanupProcess (
+    endlocal
+    exit /b 3
+)
+if not defined CleanupApplication (
+    set "CleanupApplication=%~1"
+)
+tasklist.exe /FI "IMAGENAME eq %CleanupProcess%" 2>nul | find /I "%CleanupProcess%" >nul
+if errorlevel 1 (
+    endlocal
+    exit /b 0
+)
+if defined TBOK_NONINTERACTIVE (
+    endlocal
+    call :LOG NOTICE: %~2 is running. Noninteractive mode will not terminate it; unlocked cache files will still be cleaned.
+    exit /b 0
+)
+call :LOG Closing %~2 before cache cleanup...
+taskkill.exe /F /IM "%~1" >nul 2>&1
+set "TaskKillRC=%ERRORLEVEL%"
+if not "%TaskKillRC%"=="0" (
+    endlocal
+    call :LOG WARNING: %~2 could not be closed. Cleanup will continue and remove only files that are not locked.
+    exit /b 3
+)
+endlocal
+call :LOG %~2 was closed successfully.
+exit /b 2
+
 :BeardSweeper
-call :LOG BeardSweeper integration is currently in development - only safe non-destructive options have been added.
-call :LOG Configuring and Running Enhanced DiskCleanup routine
+call :LOG BeardSweeper performs aggressive system, application, and disk cleanup.
+call :LOG Running applications are terminated only during interactive cleanup.
+call :LOG Noninteractive cleanup preserves application processes and Windows rollback installation files.
+cls
+	call :LOG  Beard Sweeper, TBOK automagic disk cleanup script!
+	call :LOG  	Version 10-27-2026 mm/dd/yyyy
+	ECHO.
+	ECHO __/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\_________/\\\\\_______/\\\________/\\\_        
+	ECHO  _\///////\\\/////__\/\\\/////////\\\_____/\\\///\\\____\/\\\_____/\\\//__       
+	ECHO   _______\/\\\_______\/\\\_______\/\\\___/\\\/__\///\\\__\/\\\__/\\\//_____      
+	ECHO    _______\/\\\_______\/\\\\\\\\\\\\\\___/\\\______\//\\\_\/\\\\\\//\\\_____     
+	ECHO     _______\/\\\_______\/\\\/////////\\\_\/\\\_______\/\\\_\/\\\//_\//\\\____    
+	ECHO      _______\/\\\_______\/\\\_______\/\\\_\//\\\______/\\\__\/\\\____\//\\\___   
+	ECHO       _______\/\\\_______\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_____\//\\\__  
+	ECHO        _______\/\\\_______\/\\\\\\\\\\\\\/_____\///\\\\\/_____\/\\\______\//\\\_ 
+	ECHO         _______\///________\/////////////_________\/////_______\///________\///__  
+    ECHO.                                    
+	ECHO.	Community effort can be tracked at https://github.com/TheBeardofKnowledge/Scripts-from-my-videos
+	ECHO.	Purpose of this batch file is to recover as much "safe" free space from your windows system drive
+	ECHO.	to gain back free space that Windows, other programs, and users have consumed.
+	ECHO. 	Credits: Because the work we do in I.T. is often unrecognized, this section will show anyone
+	ECHO. 	who contributes to the script to improve it - Thank you to all that have helped and tested.
+	ECHO. 	TheBeardofKnowledge https://thebeardofknowledge.bio.link/
+	ECHO. 	Credit...RayneDance.. https://github.com/RayneDance For improving chrome-edge profile handling
+	ECHO. 	Credit...WebFoundUs.. https://tiktok.com/webb_found_us For the Name "Beard Sweeper"
+	ECHO.	Credit...tristanghanks..https://github.com/tristanghanks for catching and fixing all typo errors
+	ECHO.
+:StartofScript
+call :LOG *********************************************************************
+call :LOG Current system drive space:
+
+set "TBOK_DISK_FREE_BEFORE="
+set "TBOK_DISK_TOTAL="
+
+for /f "tokens=1,2 delims=|" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID='''+$env:SystemDrive+'''');if($d -and $d.Size -gt 0){[Console]::WriteLine([string]$d.FreeSpace+'|'+[string]$d.Size)}" 2^>nul') do (
+    set "TBOK_DISK_FREE_BEFORE=%%A"
+    set "TBOK_DISK_TOTAL=%%B"
+)
+
+if defined TBOK_DISK_FREE_BEFORE (
+    for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$f=[double]$env:TBOK_DISK_FREE_BEFORE;$t=[double]$env:TBOK_DISK_TOTAL;'{0:N2} GB free of {1:N2} GB ({2:N1}%% free)' -f ($f/1GB),($t/1GB),(100*$f/$t)"') do (
+        call :LOG %%A
+    )
+) else (
+    call :LOG WARNING: Starting free disk space could not be determined.
+)
+
+call :LOG *********************************************************************
+	ECHO.
+	ECHO Initializing Sweeping Procedure...
+	ECHO.
+	ECHO Starting cleanup of orphaned Windows App installers
+c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPackages
+
+
+:BadPrintJobs
+	ECHO Deleting unreleased erroneous print jobs
+	NET STOP /Y Spooler >nul 2>&1
+	DEL /S /Q /F %systemroot%\system32\spool\printers\*.* >nul 2>&1
+	net start spooler >nul 2>&1
+	
+:fontcache
+	ECHO Clearing all Windows Font Cache
+	Net stop fontcache >nul 2>&1
+	DEL /S /Q /F %systemroot%\ServiceProfiles\LocalService\AppData\Local\FontCache\*.* >nul 2>&1
+	NET start fontcache	>nul 2>&1
+
+:WindowsUpdatesCleanup
+	ECHO Performing Windows Updates Cleanup
+	net stop bits >nul 2>&1
+	net stop wuauserv >nul 2>&1
+	net stop appidsvc >nul 2>&1
+	net stop cryptsvc >nul 2>&1
+	ECHO Clearing Windows Update Cache
+	DEL /S /Q /F "%ALLUSERSPROFILE%\Application Data\Microsoft\Network\Downloader\*.*"	>nul 2>&1
+	rmdir /S /Q "%systemroot%\SoftwareDistribution" >nul 2>&1
+	rmdir /S /Q "%systemroot%\system32\catroot2" >nul 2>&1
+::commented out the below line because rolling back updates is needed, and it's usually only 1-2Gb.  
+::If you don't care about rolling back updates (DANGER Will Robinson), remove the :: in front of the next line.	
+::rmdir /S /Q "%systemroot%\Installer\$PatchCache$"  >nul 2>&1
+	DEL /S /Q /F "%systemroot%\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Logs\*.*" >nul 2>&1
+	ECHO Cleanup Complete - Starting Windows Update Services
+	net start bits >nul 2>&1
+	net start wuauserv >nul 2>&1
+	net start appidsvc >nul 2>&1
+	net start cryptsvc >nul 2>&1
+::for extra aggressive Windows Image cleanup uncomment the next line by removing the :: but keep in mind you won't be able to revert this cleanup
+	::DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase
+
+:WindowsTempFilesCleanup
+	ECHO Deleting all System temporary files
+	DEL /S /Q /F "%systemroot%\Temp\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Prefetch\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\LiveKernelReports\*.dmp"	>nul 2>&1
+	DEL /S /Q /F "%systemroot%\appcompat\backuptest\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\System32\sru\*.dat" >nul 2>&1
+
+:WindowsLogs
+	ECHO Cleaning Windows Log Files
+	DEL /S /Q /F "%systemroot%\Logs\NetSetup\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\SIH\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\CBS\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\DPX\*.log" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\DISM\*.log" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\MeasuredBoot\*.log" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\SoftwareDistribution\DataStore\Logs\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\runSW.log" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\system32\sru\*.log" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\WindowsUpdate\*.*" >nul 2>&1
+	DEL /S /Q /F "%systemroot%\Logs\*.LOG" >nul 2>&1
+	DEL /S /Q /F "%systemdrive%\ProgramData\USOshared\Logs\User\*.*" >nul 2>&1
+
+:UserProfileCleanup
+	ECHO Cleaning up user profiles
+	setlocal enableextensions
+	For /d %%u in (c:\users\*) do (
+	DEL /S /Q /F "%%u\Local Settings\Temp\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Temp\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Explorer\ThumbCacheToDelete\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\CrashDumps\*.*" 	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\LocalLow\Microsoft\CryptnetUrlCache\Content\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Teams\Service Worker\CacheStorage\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Microsoft\explorer\thumbcache\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
+	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Windows\WebCache\*.*" >nul 2>&1
+	)
+
+:TheRecycleBinIsNotAfolder
+	ECHO Emptying the recycle bin... you weren't ACTUALLY storing stuff in there, were you? I hope not.
+	rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
+
+:UserProgramsCacheCleanup
+	Echo Cleaning up cache from programs that are space hogs
+
+:iTunesANDiOSbackups
+	ECHO Clearing iTunes cached installers, iOS device firmware cache for all users
+	call :PrepareApplicationForCleanup "itunes.exe" "Apple iTunes"
+	set "ITunesPrepareRC=!ERRORLEVEL!"
+	RD /S /Q "%systemdrive%\ProgramData\Apple Inc\Installer Cache"	>nul 2>&1
+	RD /S /Q "%systemdrive%\ProgramData\Apple Computer\Installer Cache"	>nul 2>&1
+	For /d %%u in (c:\users\*) do (
+	RD /S /Q "%%u\AppData\roaming\Apple Computer\iTunes\iPhone Software Updates"	>nul 2>&1
+	RD /S /Q "%%u\AppData\roaming\Apple Computer\iTunes\iPod Software Updates"	>nul 2>&1
+	)
+	ECHO iOS device backup cleanup
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Noninteractive cleanup: iTunes mobile-device backups will be preserved.
+    goto :FreakenMicrosoftTeams
+)
+ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is Y
+CHOICE /C YN /N /T 10 /D Y
+
+IF ERRORLEVEL 2 GOTO :FreakenMicrosoftTeams
+IF ERRORLEVEL 1 GOTO :iOSbackups
+
+:iOSbackups
+	For /d %%u in (c:\users\*) do (
+	RD /S /Q "%%u\AppData\roaming\Apple Computer\MobileSync\Backup"	>nul 2>&1
+	RD /S /Q "%%u\Apple\MobileSync\Backup" >nul 2>&1
+	)
+
+:FreakenMicrosoftTeams
+	ECHO Clearing Microsoft Teams Cache for all users
+	call :PrepareApplicationForCleanup "teams.exe" "Microsoft Teams Classic"
+	set "TeamsClassicPrepareRC=!ERRORLEVEL!"
+	call :PrepareApplicationForCleanup "ms-teams.exe" "Microsoft Teams"
+	set "TeamsPrepareRC=!ERRORLEVEL!"
+	For /d %%u in (c:\users\*) do (
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\blob_storage\*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\cache\*"		>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\databases\*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\gpucache\*"		>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\indexeddb\*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\Local Storage\*"	>nul 2>&1
+	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\tmp\*"		>nul 2>&1
+	)
+
+:OutlookCache
+	ECHO Clearing Outlook Cache
+	call :PrepareApplicationForCleanup "outlook.exe" "Microsoft Outlook"
+	set "OutlookPrepareRC=!ERRORLEVEL!"
+	For /d %%u in (c:\users\*) do (
+	RD /S /Q "%%u\AppData\Local\Microsoft\Outlook\RoamCache\"	 >nul 2>&1
+	RD /S /Q "%%u\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\"	 >nul 2>&1
+	)
+
+:OneDrive
+ECHO Cleaning OneDrive Cache for all users
+	call :PrepareApplicationForCleanup "OneDrive.exe" "Microsoft OneDrive"
+	set "OneDrivePrepareRC=!ERRORLEVEL!"
+	call :PrepareApplicationForCleanup "FileCoAuth.exe" "Microsoft Office File Co-Authoring"
+	set "FileCoAuthPrepareRC=!ERRORLEVEL!"
+    SETLOCAL EnableDelayedExpansion
+
+    ECHO Cleaning Cache files for all users
+    For /d %%u in ("%systemdrive%\users\*") do (
+        SET "oneDriveDataDir=%%u\AppData\Local\Microsoft\OneDrive"
+        del /q /s /f "!oneDriveDataDir!\logs\*.*" >nul 2>&1
+        del /q /s /f "!oneDriveDataDir!\temp\*.*" >nul 2>&1
+        del /q /s /f "!oneDriveDataDir!\update\*.*" >nul 2>&1
+        del /q /s /f "!oneDriveDataDir!\syncengine\*.*" >nul 2>&1
+        del /q /s /f "!oneDriveDataDir!\Telemetry\*.*" >nul 2>&1
+        del /q /s /f "%%u\AppData\Local\OneDrive\Cache\qmlcache\*.*" >nul 2>&1
+    )
+
+    ECHO Cleaning System OneDrive temporary files
+		del /q /s /f "%SystemRoot%\Temp\OneDrive*.*" >nul 2>&1
+		del /q /s /f "%ProgramData%\Microsoft OneDrive\*.*" >nul 2>&1
+		del /q /s /f "%SystemRoot%\SysWOW64\config\systemprofile\AppData\Local\Microsoft\OneDrive\*.*" >nul 2>&1
+		del /q /s /f "%SystemRoot%\System32\config\systemprofile\AppData\Local\Microsoft\OneDrive\*.*" >nul 2>&1
+		del /q /s /f "%SystemRoot%\System32\config\systemprofile\AppData\Local\Microsoft\OneDrive\Cache\qmlcache\*.*" >nul 2>&1
+		del /q /s /f "%SystemRoot%\SysWOW64\config\systemprofile\AppData\Local\Microsoft\OneDrive\Cache\qmlcache\*.*" >nul 2>&1
+
+    ENDLOCAL
+	Echo DONE - Remember to reopen OneDrive to resume file sync.
+
+:WindowsSearchreset
+	ECHO Stopping the Search Service to clear and reset it
+	sc config wsearch start=disabled >nul 2>&1
+	sc stop wsearch >nul 2>&1
+	timeout /t 5 /nobreak >nul 2>&1
+	::flagging the search database as dirty so it can perform a reindex on next startup
+	REG ADD "HKLM\SOFTWARE\Microsoft\Windows Search" /v SetupCompletedSuccessfully /t REG_DWORD /d 0 /f >nul 2>&1
+	::clearing out the existing search database
+	DEL /S /Q /F /A "%systemdrive%\ProgramData\Microsoft\Search\Data\Applications\Windows\*.*"  >nul 2>&1
+	::restoring Search service defaults
+	sc config wsearch start=delayed-auto  >nul 2>&1
+	::sc start wsearch
+	ECHO Windows Search Successfully Reset - search results will be limited while it rebuilds
+
+:WebBrowsers
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Starting noninteractive browser cache cleanup.
+    call :LOG Running browsers will not be terminated; unlocked cache files will still be removed.
+) else (
+    call :LOG Starting interactive browser cache cleanup.
+    call :LOG Running Chrome, Edge, and Firefox processes will be closed before their caches are cleaned.
+)
+
+:InternetExploder
+call :LOG Cleaning legacy Internet cache for all users...
+
+%SystemRoot%\System32\rundll32.exe InetCpl.cpl,ClearMyTracksByProcess 255 >nul 2>&1
+%SystemRoot%\System32\rundll32.exe InetCpl.cpl,ClearMyTracksByProcess 4351 >nul 2>&1
+
+for /d %%U in ("%SystemDrive%\Users\*") do (
+    del /s /q /f "%%~fU\AppData\Local\Microsoft\Windows\INetCache\*" >nul 2>&1
+    del /s /q /f "%%~fU\AppData\Local\Microsoft\Windows\Temporary Internet Files\*" >nul 2>&1
+)
+
+call :LOG Legacy Internet cache cleanup completed.
+
+:GoogleChrome
+call :LOG Cleaning Google Chrome cache for all users and profiles
+call :PrepareApplicationForCleanup "chrome.exe" "Google Chrome"
+set "ChromePrepareRC=!ERRORLEVEL!"
+
+setlocal EnableDelayedExpansion
+
+for /d %%U in ("%SystemDrive%\Users\*") do (
+    set "ChromeDataDir=%%~fU\AppData\Local\Google\Chrome\User Data"
+
+    if exist "!ChromeDataDir!" (
+        for /d %%P in ("!ChromeDataDir!\Default" "!ChromeDataDir!\Profile *") do (
+            if exist "%%~fP" (
+                del /q /s /f "%%~fP\Cache\Cache_Data\*" >nul 2>&1
+                del /q /s /f "%%~fP\Code Cache\js\*" >nul 2>&1
+                del /q /s /f "%%~fP\Code Cache\wasm\*" >nul 2>&1
+                del /q /s /f "%%~fP\Service Worker\CacheStorage\*" >nul 2>&1
+                del /q /s /f "%%~fP\Service Worker\ScriptCache\*" >nul 2>&1
+                del /q /s /f "%%~fP\GPUCache\*" >nul 2>&1
+            )
+        )
+        del /q /s /f "!ChromeDataDir!\System Profile\Cache\Cache_Data\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\System Profile\Code Cache\js\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\System Profile\Code Cache\wasm\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\extensions_crx_cache\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\component_crx_cache\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\GrShaderCache\*" >nul 2>&1
+        del /q /s /f "!ChromeDataDir!\ShaderCache\*" >nul 2>&1
+    )
+)
+endlocal
+
+if "!ChromePrepareRC!"=="3" (
+    call :LOG NOTICE: Google Chrome remained open. Locked cache files may not have been removed.
+)
+call :LOG Google Chrome cache cleanup completed.
+
+
+:EdgeCacheCleanup
+call :PrepareApplicationForCleanup "msedge.exe" "Microsoft Edge"
+set "EdgePrepareRC=!ERRORLEVEL!"
+
+call :LOG Cleaning Microsoft Edge cache for all users and profiles...
+
+setlocal EnableExtensions EnableDelayedExpansion
+
+for /d %%U in ("%SystemDrive%\Users\*") do (
+    set "EdgeDataDir=%%~fU\AppData\Local\Microsoft\Edge\User Data"
+
+    if exist "!EdgeDataDir!\" (
+        for /d %%P in ("!EdgeDataDir!\Default" "!EdgeDataDir!\Profile *") do (
+            if exist "%%~fP\" (
+                del /q /s /f "%%~fP\Cache\Cache_Data\*" >nul 2>&1
+                del /q /s /f "%%~fP\Code Cache\js\*" >nul 2>&1
+                del /q /s /f "%%~fP\Code Cache\wasm\*" >nul 2>&1
+                del /q /s /f "%%~fP\Service Worker\CacheStorage\*" >nul 2>&1
+                del /q /s /f "%%~fP\Service Worker\ScriptCache\*" >nul 2>&1
+                del /q /s /f "%%~fP\GPUCache\*" >nul 2>&1
+                del /q /s /f "%%~fP\EdgeCoupons\coupons_data.db\*.ldb" >nul 2>&1
+                del /q /s /f "%%~fP\Media Cache\*" >nul 2>&1
+                del /q /s /f "%%~fP\Crashpad\*" >nul 2>&1
+                del /q /s /f "%%~fP\OptimizationGuidePredictionModels\*" >nul 2>&1
+            )
+        )
+        del /q /s /f "!EdgeDataDir!\extensions_crx_cache\*" >nul 2>&1
+        del /q /s /f "!EdgeDataDir!\BrowserMetrics\*" >nul 2>&1
+        del /q /f "!EdgeDataDir!\*.pma" >nul 2>&1
+        del /q /s /f "!EdgeDataDir!\component_crx_cache\*" >nul 2>&1
+        del /q /s /f "!EdgeDataDir!\GrShaderCache\*" >nul 2>&1
+        del /q /s /f "!EdgeDataDir!\ShaderCache\*" >nul 2>&1
+    )
+)
+endlocal
+if "!EdgePrepareRC!"=="3" (
+    call :LOG NOTICE: Microsoft Edge remained open. Locked cache files may not have been removed.
+)
+call :LOG Microsoft Edge cache cleanup completed.
+
+
+:FirefoxCacheCleanup
+call :PrepareApplicationForCleanup "firefox.exe" "Mozilla Firefox"
+set "FirefoxPrepareRC=!ERRORLEVEL!"
+
+call :LOG Cleaning Mozilla Firefox cache for all users and profiles...
+
+for /d %%U in ("%SystemDrive%\Users\*") do (
+    for /d %%P in ("%%~fU\AppData\Local\Mozilla\Firefox\Profiles\*") do (
+        if exist "%%~fP\cache2\entries\" (
+            del /q /s /f "%%~fP\cache2\entries\*" >nul 2>&1
+        )
+        if exist "%%~fP\startupCache\" (
+            del /q /s /f "%%~fP\startupCache\*" >nul 2>&1
+        )
+    )
+)
+if "!FirefoxPrepareRC!"=="3" (
+    call :LOG NOTICE: Mozilla Firefox remained open. Locked cache files may not have been removed.
+)
+call :LOG Mozilla Firefox cache cleanup completed.
+
 :CLEANMGR
 	ECHO Maximizing Disk Cleanup registry settings for all safe to delete content
 
@@ -4631,22 +5155,7 @@ call :LOG Disk Cleanup registry settings completed.
 call :LOG Running Windows Disk Cleanup. This can take a while.
 call :LOG CleanMgr timeout is 30 minutes.
 
-start "" cleanmgr.exe /sagerun:69
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-"$timeoutSeconds = 1800;" ^
-"$stopWatch = [Diagnostics.Stopwatch]::StartNew();" ^
-"while ($stopWatch.Elapsed.TotalSeconds -lt $timeoutSeconds) {" ^
-"    $cleanMgr = Get-Process -Name cleanmgr -ErrorAction SilentlyContinue;" ^
-"    if ($null -eq $cleanMgr) { exit 0 };" ^
-"    Start-Sleep -Seconds 5;" ^
-"};" ^
-"$cleanMgr = Get-Process -Name cleanmgr -ErrorAction SilentlyContinue;" ^
-"if ($cleanMgr) {" ^
-"    $cleanMgr | Stop-Process -Force -ErrorAction SilentlyContinue;" ^
-"    exit 2;" ^
-"};" ^
-"exit 0" >nul 2>&1
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$p=Start-Process -FilePath cleanmgr.exe -ArgumentList '/sagerun:69' -PassThru;try{Wait-Process -Id $p.Id -Timeout 1800 -ErrorAction Stop;exit 0}catch{if(-not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue};exit 2}" >nul 2>&1
 
 set "CleanMgrRC=!ERRORLEVEL!"
 
@@ -4675,7 +5184,107 @@ set "_RootKey="
 
 if not "!CleanMgrRC!"=="0" exit /b 1
 if not "!ComponentCleanupRC!"=="0" exit /b 1
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Noninteractive cleanup: restore-point and previous-Windows-install removal was skipped.
+    goto :END
+)
 
+:PreviousWindowsInstalls
+set "TBOK_PREVIOUS_WINDOWS_FOUND=0"
+
+if exist "%SystemDrive%\Windows.old\" (
+    set "TBOK_PREVIOUS_WINDOWS_FOUND=1"
+    call :LOG FOUND: %SystemDrive%\Windows.old
+)
+if exist "%SystemDrive%\$Windows.~BT\" (
+    set "TBOK_PREVIOUS_WINDOWS_FOUND=1"
+    call :LOG FOUND: %SystemDrive%\$Windows.~BT
+)
+if exist "%SystemDrive%\$Windows.~WS\" (
+    set "TBOK_PREVIOUS_WINDOWS_FOUND=1"
+    call :LOG FOUND: %SystemDrive%\$Windows.~WS
+)
+if "!TBOK_PREVIOUS_WINDOWS_FOUND!"=="0" (
+    call :LOG No previous Windows installation folders were found. Cleanup was skipped.
+    set "TBOK_PREVIOUS_WINDOWS_FOUND="
+    goto :BeardsweeperEND
+)
+set "TBOK_PREVIOUS_WINDOWS_FOUND="
+call :LOG Previous Windows installation files were detected that can be removed.
+
+	ECHO	//////////////////////////////////////////////////////////////////////////////////////
+	ECHO	/////  Warning! To Maximize Free Space, Previous Windows installation            /////
+	ECHO	/////  Cleanup process is about to begin.  You will NOT be able to               /////
+	ECHO	/////  restore your pc to a previous installation if you continue.               /////
+	ECHO	//////////////////////////////////////////////////////////////////////////////////////
+	ECHO Are you sure you wish to continue? [Y/N] Default is Y
+	CHOICE /C YN /N /T 10 /D Y
+
+IF ERRORLEVEL 2 GOTO :BeardsweeperEND
+IF ERRORLEVEL 1 GOTO :oldwindowsinstalls
+
+:oldwindowsinstalls
+call :LOG Removal of old Windows installations will proceed
+
+:Windows.old
+::The obvious Windows.old folder that is visible
+	IF exist "%systemDrive%\Windows.old" (
+	takeown /F "%systemDrive%\Windows.old" /A /R /D Y >nul 2>&1
+	icacls "%systemdrive%\Windows.old" /grant *S-1-5-32-544:F /T /C /Q >nul 2>&1
+	RD /s /q %systemdrive%\Windows.old >nul 2>&1
+	) else goto windowsbt
+:Windowsbt
+::$Windows.~BT hidden folder
+	IF exist "%systemDrive%\$Windows.~BT" (
+	takeown /F "%systemDrive%\$Windows.~BT" /A /R /D Y >nul 2>&1
+	icacls %systemdrive%\$Windows.~BT\*.* /T /grant administrators:F >nul 2>&1
+	RD /s /q %systemDrive%\$Windows.~BT >nul 2>&1
+	) else goto Windowsws
+:Windowsws
+::$Windows.~WS hidden folder
+IF exist "%systemdrive%\$Windows.~WS" (
+	takeown /F "%systemDrive%\$Windows.~WS" /A /R /D Y >nul 2>&1
+	icacls %systemdrive%\$Windows.~WS\*.* /T /grant administrators:F >nul 2>&1
+	RD /s /q %systemDrive%\$Windows.~WS >nul 2>&1
+	) else (
+	ECHO No previous windows version folders found
+	)
+	
+:removeRestorePoints
+::commended out due to triggerring some antivirus programs, if you want to include this, remove the "::"
+::vssadmin delete shadows /all >nul 2>&1 
+::Remove the "::" if you want the system to create a new restore point.
+::wmic.exe /Namespace:\\root\default Path SystemRestore Call CreateRestorePoint "AfterDiskCleanup", 100, 7 >nul 2>&1
+
+:BeardsweeperEND
+call :LOG *********************************************************************
+call :LOG BeardSweeper disk-space results:
+
+set "TBOK_DISK_FREE_AFTER="
+
+for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$d=Get-CimInstance Win32_LogicalDisk -Filter ('DeviceID='''+$env:SystemDrive+'''');if($d){[Console]::WriteLine([string]$d.FreeSpace)}" 2^>nul') do (
+    set "TBOK_DISK_FREE_AFTER=%%A"
+)
+if defined TBOK_DISK_FREE_BEFORE if defined TBOK_DISK_FREE_AFTER if defined TBOK_DISK_TOTAL (
+    for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$before=[double]$env:TBOK_DISK_FREE_BEFORE;$after=[double]$env:TBOK_DISK_FREE_AFTER;$total=[double]$env:TBOK_DISK_TOTAL;$saved=$after-$before;$pct=if($total -gt 0){100*$saved/$total}else{0};'Space Recovered: {0:N2} GB ({1:N2}%% of system drive)' -f ($saved/1GB),$pct"') do (
+        call :LOG %%A
+    )
+    for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$f=[double]$env:TBOK_DISK_FREE_AFTER;$t=[double]$env:TBOK_DISK_TOTAL;'{0:N2} GB now free of {1:N2} GB ({2:N1}%% free)' -f ($f/1GB),($t/1GB),(100*$f/$t)"') do (
+        call :LOG %%A
+    )
+) else (
+    call :LOG WARNING: BeardSweeper disk-space savings could not be calculated.
+)
+call :LOG *********************************************************************
+
+set "TBOK_DISK_FREE_BEFORE="
+set "TBOK_DISK_FREE_AFTER="
+set "TBOK_DISK_TOTAL="
+ECHO.
+
+ECHO All cleaned up, have a nice day!
+:endmusic
+powershell -NoProfile -Command "$player = New-Object System.Media.SoundPlayer \"$env:windir\Media\windows logon.wav\"; $player.PlaySync()"
 call :LOG BeardSweeper cleanup completed successfully.
 exit /b 0
 
@@ -4699,7 +5308,7 @@ if defined TBOK_NONINTERACTIVE (
     goto :EXIT
 )
 
-choice.exe /c RME /n /m "Restart now, Menu, or Exit? [R/M/E]: Default E in 15 seconds " /t 15 /d E 2>>"%LOGFILE%"
+choice.exe /c RME /n /m "Restart now, Menu, or Exit? [R/M/E]: Default E in 30 seconds " /t 30 /d E 2>>"%LOGFILE%"
 set "RestartChoiceRC=%ERRORLEVEL%"
 
 if "%RestartChoiceRC%"=="255" (
