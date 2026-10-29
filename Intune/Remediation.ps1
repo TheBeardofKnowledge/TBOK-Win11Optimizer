@@ -234,7 +234,7 @@ if ($Config.ApplyPerformanceTweaks) {
         Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' SystemResponsiveness DWord 10
     }
     Invoke-Safely "Set service shutdown wait to 15 seconds" {
-        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' WaitToKillServiceTimeout String '15000'
+        Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' WaitToKillServiceTimeout String '5000'
     }
     Invoke-Safely "Enable long path support" {
         Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled DWord 1
