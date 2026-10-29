@@ -1,45 +1,41 @@
-A Business ready comprehensive Windows Performance Optimization batch script designed to debloat Windows, improve system responsiveness, improve gaming/workstation performance, and increase user privacy.
+# TBOK Windows Performance Optimizer
 
-ALL WITHOUT BREAKING A SINGLE FEATURE WE ACTUALLY USE!
+Hardware-aware Windows 10 and Windows 11 configuration and cleanup utilities for personal PCs and managed workstations.
 
-Yes... It's here, it works, and best of all; it's majority based on and verified by Microsoft documentation at learn.microsoft.com
+The scripts change Windows policies, services, boot settings, and per-user preferences. Effects vary by Windows build, hardware, and workload. Review the code and test on representative devices before broad deployment; no optimizer can guarantee that every feature or application remains unaffected.
 
-The easiest,safest, and most comprehensive optimization & debloat tool out there (that I know of) that uses hardware aware decision making to apply improvements.
+The batch script uses hardware-aware decisions for selected settings. Some operations are Windows-edition or hardware dependent and may be skipped or fail; review the log after each run.
 
-An easy to use, business approved, 1-click Windows 11 and Windows 10 Optimization script that's 100% safe to use by I.T. teams, MSP's, System Builders, and computer technicians (but you can also use it for personal use)
-... and it's already getting improvements thanks to your testing and feedback.
-Yes, this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored, but ~80% is still aplicable.
-
-
-If you haven't noticed, Windows 11 is not fully optimized, in fact, it's very unnecessarily bloated.  We're not talking about special use cases here, we're talking about day to day use.
-What took 1 second in Windows 10 now takes 4 seconds in windows 11.  Multiply that by how many actions you run on a PC and you're talking about A LOT of wasted time. 
+If you haven't noticed, Windows 11 is not fully optimized, in fact, it's very unnecessarily bloated. We're not talking about special use cases here, we're talking about day to day use.
+Performance changes depend on the machine and workload. Measure before and after rather than assuming a particular improvement.
 
 WE DON'T HAVE TIME FOR THAT!
 
-It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times.  But there's hope... the Dev's left us a way to change it.
+It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times. But there's hope... the Dev's left us a way to change it.
 
-While I love debloat tools like the CTT WinUtil and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, AND for each user... that's extremely inefficient and time consuming... 
+While I love debloat tools like the CTT WinUtil and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, AND for each user... that's extremely inefficient and time consuming...
 
-FACT IS, there are soo many beneficial settings to change in Windows that don't have any negative effects and the resulting "experience" is vastly improved.
+Windows has many configurable behaviors. Some are tradeoffs or preferences, so the script keeps several potentially disruptive choices opt-in.
 
 So let's fix that and make it soo easy and safe that it removes any hurdles.
 
-What's different from this than all the others out there: we address the problem settings across all users of a PC, and also apply the settings to the default profile windows uses for any new accounts that are added, which ensures new profiles get the benefits.
-Plus we ONLY change settings that DON'T affect Windows features or security negatively. 
+The batch applies per-user settings to eligible existing profiles and the Default profile for future accounts. Service and special profiles are excluded where detected.
+Settings are selected to target common configuration preferences, but they can still affect application behavior, accessibility, security tooling, or performance on a particular device. Review the options and logs before deployment.
 
 You see, most debloat tools only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.
 
 This is a problem for Custom PC builders & IT people because when a new person signs in with their account on that computer, all the bad settings and bloat come back.
 
-This script will make every safe registry setting change to Windows on a system and per-user level that helps the pc perform better, and applies specific changes using logic instead of blindly applying settings.
+The script applies a selected set of system and per-user registry changes, with hardware-dependent choices for supported settings.
 
-It disables and permanently removes common "bloat" including things like co-pilot, widgets, and also disables wasteful scheduled tasks that hog system resources.
+It removes selected built-in packages and disables selected scheduled tasks and consumer features. These changes can affect user workflows and may need to be reversed or re-enabled after deployment.
 
-The script creates a system restore point before anything is touched, and if that fails, it creates a registry export of the current registry settings as a fallback failsafe.
+The batch script requires usable rollback protection before protected optimization changes. By default, the Intune remediation requires a system restore point; if creation fails, it exports registry hives for manual recovery and cancels the run. Registry exports are not a complete system restore.
 
 So what does it do?
+
 1. Disables "Fast Startup" aka hibernation mode for desktops (keep enabled for laptops)
-2. Restores the F8 startup boot menu option (why do we have to crash windows 2 times to get it?)
+2. Enables the legacy F8 boot menu only when BitLocker is detected as off; it is skipped if BitLocker is on or its status is unknown.
 3. Properly configures virtual memory settings to avoid lag from expansion
 4. Services:
    1. Disables a few unnecessary services from startup
@@ -47,18 +43,18 @@ So what does it do?
    3. Ensures services that don't have to autorun on startup are set to demand startup
    4. Ensures required windows services are set to automatic startup
    5. Configures less essential services to delayed startup
-  
+
 5. System Wide Registry Improvements
    1. Disables Windows Network Throttling
    2. Fixes IRP stack size for better network flow and modern networks
    3. Improve system responsiveness
-   4. Speed up Shutdown time safely
+   4. Sets the service shutdown wait to 15 seconds
    5. Enables long file system paths (why is this not defaulted ON Microsoft?)
    6. Disables "Companion software" recommendations for hardware
    7. Disables Webview mode from Windows Search, returning classic search
    8. Disables known Telemetry Data Collection
    9. Disables the Windows OOBE Privacy Settings Experience prompt for new users.
-   10. Disables the WPBT feature that allows vendors to execute programs at boot
+   10. Disables WPBT execution without overwriting the firmware resource value
    11. Fixes the Network Data Usage Graph not working
    12. Disables various system telemetry
    13. Disables various intrusive MS Edge settings, including background startup
@@ -74,7 +70,7 @@ So what does it do?
 
 7. User Level Registry Improvements (applied to all users, including default profile) (sysprep)
    This is what most optimization and debloat utilities get wrong - they only apply it to the current user, when MS clearly made bloat & data collection per user.
-   1. Disables custom folder view that causes lag for explorer startup
+   1. Preserves existing Explorer folder views by default; `/RESETEXPLORERVIEWS` opts into resetting them
    2. Sets "This PC" as the default explorer view
    3. Disable allow apps to run in the background (even when closed)
    4. Force Auto Enable Game Mode which helps reduce background apps
@@ -85,30 +81,32 @@ So what does it do?
    9. Speed up "show menu" delay for classic apps
    10. Disable some gaudy desktop visual effects and animations that affect reaction time
    11. Disable Ad spaces (The OS is NOT a billboard Microsoft)
-      1. Disable Explorer Search box suggestions
-      2. Disable File Explorer sync provider ads
-      3. Disable reoccurring "finish setup" ad suggestions to "get the most out of windows"
-      4. Disable lock screen tips and ads
-      5. Disable Ad Personalization (tracking)
-      6. Disable Welcome Experience Ads
-      7. Disable Settings ads
-      8. Disable auto install of suggested apps (related to #3 above)
-      9. Disable General tips and ads (why are these together Microsoft?)
-      10. Disable home screen ads
-      11. Disable Timeline Suggestions ads
-      12. Disable Windows Content Delivery
-      13. Disable automatic enabling of OEM and Preinstalled apps (LG monitor McAfee ad incident)
-      14. Disable Diagnostic Feedback frequency and "Tailored Experiences"
-      15. Disable the Windows Feeds as policy or standard
-      16. Disable the Start Menu ads
-      17. Disable the Tailored Experiences with Telemetry feature
-   12. Disable the Task View button in the taskbar - wasted space and same as alt+tab
-   13. Disable the People button in the taskbar (auto launches teams)
-   14. Enable the taskbar end tasks feature (related to #5 above)
-   15. Hide the "meet now" button in the taskbar (related to #13 above)
-   16. Set the taskbar search box for icon only for less wasted space (works the same)
-   17. Disable Cross-device resume (optional, but skip this if you use "your phone"
-   18. Disable MS Sticky keys hotkey because leaving something on shift is as bad as caps lock
+   12. Disable Explorer Search box suggestions
+   13. Disable File Explorer sync provider ads
+   14. Disable reoccurring "finish setup" ad suggestions to "get the most out of windows"
+   15. Disable lock screen tips and ads
+   16. Disable Ad Personalization (tracking)
+   17. Disable Welcome Experience Ads
+   18. Disable Settings ads
+   19. Disable auto install of suggested apps (related to #3 above)
+   20. Disable General tips and ads (why are these together Microsoft?)
+   21. Disable home screen ads
+   22. Disable Timeline Suggestions ads
+   23. Disable Windows Content Delivery
+   24. Disable automatic enabling of OEM and Preinstalled apps (LG monitor McAfee ad incident)
+   25. Disable Diagnostic Feedback frequency and "Tailored Experiences"
+   26. Disable the Windows Feeds as policy or standard
+   27. Disable the Start Menu ads
+   28. Disable the Tailored Experiences with Telemetry feature
+   29. Disable the Task View button in the taskbar - wasted space and same as alt+tab
+   30. Disable the People button in the taskbar (auto launches teams)
+   31. Enable the taskbar end tasks feature (related to #5 above)
+   32. Hide the "meet now" button in the taskbar (related to #13 above)
+   33. Set the taskbar search box for icon only for less wasted space (works the same)
+   34. Disable Cross-device resume (optional, but skip this if you use "your phone")
+   35. Leaves StickyKeys accessibility settings unchanged
+   36. Leaves `ssh-agent` startup unchanged for SSH and developer workflows
+   37. Leaves `AutoEndTasks` disabled unless `/ALLOWFORCECLOSE` is specified
 
 8. Debloat and removal of wasteful scheduled tasks
    1. Disable MS Copilot (standard, not M365 co-pilot)
@@ -116,7 +114,6 @@ So what does it do?
    3. Disable Microsoft Office Client Telemetry and verbose logging
    4. Disable Microsoft Office "Customer Experience Program"
    5. Disable Microsoft Office Feedback
-    
 
 9. Gaming Improvements (improved 1% lows, reduce lag, improve frame timing)
    1. Reset High Precision Event Timer preconfigured so Windows will redetect on next boot
@@ -130,15 +127,8 @@ So what does it do?
 
 10. WinGet automatic software updater
 11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts. Pending full implementation.
-   
-   MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
 
-   IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
-   https://buymeacoffee.com/thebeardofl
+MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
 
-
-
-
-
-
-
+IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
+<https://buymeacoffee.com/thebeardofl>

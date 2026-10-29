@@ -8,32 +8,41 @@ Le pagefile est relu dans PagingFiles, la valeur que la remediation ecrit : meme
 meme calcul de RAM (installee, pas TotalPhysicalMemory).
 #>
 
-$ScriptVersion = '1.3.0'
-$MarkerPath    = 'HKLM:\SOFTWARE\TBOK-Optimizer'
-$MmPath        = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+$ScriptVersion = '1.3.1'
+$MarkerPath = 'HKLM:\SOFTWARE\TBOK-Optimizer'
+$MmPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
 
 try {
     $marker = Get-ItemProperty -LiteralPath $MarkerPath -ErrorAction Stop
     $versionMatches = $marker.AppliedVersion -eq $ScriptVersion
+    $failureCount = if ($null -ne $marker.FailureCount) { [int]$marker.FailureCount } else { 1 }
 
-    $ramMB = [Math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1MB, 0)
+    $installedBytes = (Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop | Measure-Object Capacity -Sum).Sum
+    if ($null -eq $installedBytes -or $installedBytes -le 0) {
+        Write-Output 'Non-compliant: installed RAM could not be determined.'
+        exit 1
+    }
+    $ramMB = [Math]::Round($installedBytes / 1MB, 0)
     if ($ramMB -ge 32768) {
         $target = '?:\pagefile.sys'
-    } else {
+    }
+    else {
         $max = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
-        $target = "C:\pagefile.sys 4096 $max"
+        $target = "$($env:SystemDrive)\pagefile.sys 4096 $max"
     }
     $pf = @((Get-ItemProperty -LiteralPath $MmPath -Name PagingFiles -ErrorAction SilentlyContinue).PagingFiles)
     $pfExpectedOk = ($pf.Count -eq 1 -and $pf[0] -eq $target)
 
-    if ($versionMatches -and $pfExpectedOk) {
+    if ($versionMatches -and $failureCount -eq 0 -and $pfExpectedOk) {
         Write-Output "Compliant: optimizer v$ScriptVersion applied, pagefile '$target'. Failures last run: $($marker.FailureCount)"
         exit 0
-    } else {
-        Write-Output "Non-compliant: versionMatches=$versionMatches pagefileOk=$pfExpectedOk (found '$($pf -join ' | ')', expected '$target')"
+    }
+    else {
+        Write-Output "Non-compliant: versionMatches=$versionMatches failures=$failureCount pagefileOk=$pfExpectedOk (found '$($pf -join ' | ')', expected '$target')"
         exit 1
     }
-} catch {
+}
+catch {
     Write-Output "Non-compliant: marker not found -- $($_.Exception.Message)"
     exit 1
 }
