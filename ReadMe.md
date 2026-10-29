@@ -1,36 +1,29 @@
 # TBOK Windows Performance Optimizer
 
-Hardware-aware Windows 10 and Windows 11 configuration and cleanup utilities for personal PCs and managed workstations.
+A business ready comprehensive Hardware-aware Windows 10 and Windows 11 configuration and cleanup script for personal PC's and managed workstations.
 
-The scripts change Windows policies, services, boot settings, and per-user preferences. Effects vary by Windows build, hardware, and workload. Review the code and test on representative devices before broad deployment; no optimizer can guarantee that every feature or application remains unaffected.
+The scripts change Windows settings, policies, services, and per-user preferences in order to improve system responsiveness, improve gaming/workstation performance, and increase user privacy.
 
-The batch script uses hardware-aware decisions for selected settings. Some operations are Windows-edition or hardware dependent and may be skipped or fail; review the log after each run.
+2 versions are available: 
+1. standalone batch file: TBOKwinOptimizer.bat  ( use this on your personal pc, keep on usb, or when Intune is not available to you)
+2. Intune deployment files for Enterprise business use (folder).
 
-If you haven't noticed, Windows 11 is not fully optimized, in fact, it's very unnecessarily bloated. We're not talking about special use cases here, we're talking about day to day use.
-Performance changes depend on the machine and workload. Measure before and after rather than assuming a particular improvement.
+If you haven't noticed, Windows 11 is not fully optimized, in fact, it's unnecessarily bloated and needs tuning. 
+It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern hardware. But there's hope... the Dev's left us a way to change it.
+Yes, this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored, but ~80% is still aplicable.
 
-WE DON'T HAVE TIME FOR THAT!
-
-It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern times. But there's hope... the Dev's left us a way to change it.
-
-While I love debloat tools like the CTT WinUtil and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, AND for each user... that's extremely inefficient and time consuming...
-
-Windows has many configurable behaviors. Some are tradeoffs or preferences, so the script keeps several potentially disruptive choices opt-in.
-
-So let's fix that and make it soo easy and safe that it removes any hurdles.
-
-The batch applies per-user settings to eligible existing profiles and the Default profile for future accounts. Service and special profiles are excluded where detected.
-Settings are selected to target common configuration preferences, but they can still affect application behavior, accessibility, security tooling, or performance on a particular device. Review the options and logs before deployment.
-
-You see, most debloat tools only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.
-
+You see, most debloat tools* only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.  While I love  tools like the CTT WinUtil, Ralphire's Win11Debloat, and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, and for each user: that's extremely inefficient and time consuming... and you're definitely NOT going to IRM a github script in an Enterprise environment, right?! RIGHT!? 
 This is a problem for Custom PC builders & IT people because when a new person signs in with their account on that computer, all the bad settings and bloat come back.
+
+So let's fix that and make it soo easy and safe that it removes any hurdles.**
 
 The script applies a selected set of system and per-user registry changes, with hardware-dependent choices for supported settings.
 
-It removes selected built-in packages and disables selected scheduled tasks and consumer features. These changes can affect user workflows and may need to be reversed or re-enabled after deployment.
+The script applies per-user settings to eligible existing profiles and the Default profile for future accounts. Service and special profiles are excluded where detected.
 
-The batch script requires usable rollback protection before protected optimization changes. By default, the Intune remediation requires a system restore point; if creation fails, it exports registry hives for manual recovery and cancels the run. Registry exports are not a complete system restore.
+It removes selected built-in packages and disables selected scheduled tasks and consumer features. 
+
+The scripts require usable rollback protection before protected optimization changes. By default, they requires a system restore point; if creation fails, it exports registry hives for manual recovery and cancels the run. Registry exports are not a complete system restore.
 
 So what does it do?
 
@@ -129,6 +122,9 @@ So what does it do?
 11. Ultimate Disk Cleanup with my own script - BeardSweeper - More comprehensive cleanup than most or all utilities and scripts. Pending full implementation.
 
 MORE TO COME, but after testing... I am not going to add anything that is a placebo or unverified improvement.
+
+*(excluding Ralphire's sysprep mode)
+**Effects vary by Windows build, hardware, and workload. Review the code and test on representative devices before broad deployment; no optimizer can guarantee that every feature or application remains unaffected.  The batch script uses hardware-aware decisions for selected settings. Some operations are Windows-edition or hardware dependent and may be skipped or fail; review the log after each run.  Windows has many configurable behaviors. Some are tradeoffs or preferences, so the script keeps several potentially disruptive choices opt-in through /switches. Settings are selected to target common configuration preferences, but they can still affect application behavior, accessibility, security tooling, or performance on a particular device in your environment. Review the options and logs before deployment. Performance changes depend on the machine and workload. Measure before and after rather than assuming a particular improvement.  These changes can affect user workflows and may need to be reversed or re-enabled after deployment.
 
 IF THIS HELPED YOU OUT -CONSIDER BUYING ME A COFFEE- THATS WHAT POWERED THIS
 <https://buymeacoffee.com/thebeardofl>
