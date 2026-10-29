@@ -4809,10 +4809,16 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 :WindowsTempFilesCleanup
 	ECHO Deleting all System temporary files
 	DEL /S /Q /F "%systemroot%\Temp\*.*" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\Prefetch\*.*" >nul 2>&1
+	REM The Prefetch folder is intentionally not cleared. The optimize routine sets the
+	REM Windows Prefetch policy by RAM and disk type; wiping Prefetch here undoes that and
+	REM slows the next several boots and first app launches while it is rebuilt. SSDs are
+	REM not helped by clearing it.
 	DEL /S /Q /F "%systemroot%\LiveKernelReports\*.dmp"	>nul 2>&1
 	DEL /S /Q /F "%systemroot%\appcompat\backuptest\*.*" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\System32\sru\*.dat" >nul 2>&1
+	REM %systemroot%\System32\sru holds the System Resource Usage Monitor database. It
+	REM backs the Task Manager app history, the network Data Usage page and battery-use
+	REM history. The optimize routine enables the Ndu service specifically to fix the Data
+	REM Usage graph, so this database and its logs are intentionally not deleted.
 
 :WindowsLogs
 	ECHO Cleaning Windows Log Files
@@ -4824,7 +4830,6 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%systemroot%\Logs\MeasuredBoot\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\SoftwareDistribution\DataStore\Logs\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\runSW.log" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\system32\sru\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\WindowsUpdate\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\*.LOG" >nul 2>&1
 	DEL /S /Q /F "%systemdrive%\ProgramData\USOshared\Logs\User\*.*" >nul 2>&1
