@@ -5241,8 +5241,8 @@ call :LOG Previous Windows installation files were detected that can be removed.
 	ECHO	/////  Cleanup process is about to begin.  You will NOT be able to               /////
 	ECHO	/////  restore your pc to a previous installation if you continue.               /////
 	ECHO	//////////////////////////////////////////////////////////////////////////////////////
-	ECHO Are you sure you wish to continue? [Y/N] Default is Y
-	CHOICE /C YN /N /T 10 /D Y
+	ECHO Are you sure you wish to continue? [Y/N] Default is N
+	CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :BeardsweeperEND
 IF ERRORLEVEL 1 GOTO :oldwindowsinstalls
