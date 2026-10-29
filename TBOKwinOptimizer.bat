@@ -2792,9 +2792,10 @@ exit /b 0
 
 ::TBOK-REMOTE-PS::$ErrorActionPreference = 'Stop'
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::$remoteDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::# Set after the session opens: a new private folder per run (see below).
+::TBOK-REMOTE-PS::$remoteDirectory = $null
 ::TBOK-REMOTE-PS::$remoteBatchName = Split-Path -Leaf $BatchPath
-::TBOK-REMOTE-PS::$remoteBatchPath = Join-Path $remoteDirectory $remoteBatchName
+::TBOK-REMOTE-PS::$remoteBatchPath = $null
 ::TBOK-REMOTE-PS::$session = $null
 ::TBOK-REMOTE-PS::$remoteExitCode = 1
 ::TBOK-REMOTE-PS::
@@ -2839,14 +2840,38 @@ exit /b 0
 ::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::    }
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    Write-Host "Preparing remote working directory: $remoteDirectory"
+::TBOK-REMOTE-PS::    Write-Host 'Preparing a private remote working directory...'
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
-::TBOK-REMOTE-PS::        param($Directory)
+::TBOK-REMOTE-PS::    # Security: standard users can create files and folders under C:\ProgramData.
+::TBOK-REMOTE-PS::    # A fixed folder there with inherited permissions lets any local user pre-create
+::TBOK-REMOTE-PS::    # it (and own it), plant executables in it, or replace the batch file between
+::TBOK-REMOTE-PS::    # the copy and the elevated run. Create a new, randomly named folder whose ACL
+::TBOK-REMOTE-PS::    # grants access only to SYSTEM and Administrators, set at creation time, and
+::TBOK-REMOTE-PS::    # refuse to reuse a folder that already exists.
+::TBOK-REMOTE-PS::    $remoteDirectory = Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        $directory = Join-Path $env:ProgramData ('TBOK-' + [guid]::NewGuid().ToString('N'))
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        New-Item -Path $Directory -ItemType Directory -Force |
-::TBOK-REMOTE-PS::            Out-Null
-::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory
+::TBOK-REMOTE-PS::        if (Test-Path -LiteralPath $directory) {
+::TBOK-REMOTE-PS::            throw "Remote staging directory already exists: $directory"
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        $security = New-Object System.Security.AccessControl.DirectorySecurity
+::TBOK-REMOTE-PS::        $security.SetAccessRuleProtection($true, $false)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+::TBOK-REMOTE-PS::            $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
+::TBOK-REMOTE-PS::            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule `
+::TBOK-REMOTE-PS::                $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+::TBOK-REMOTE-PS::            $security.AddAccessRule($rule)
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        [void][System.IO.Directory]::CreateDirectory($directory, $security)
+::TBOK-REMOTE-PS::        return $directory
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $remoteDirectory = [string]$remoteDirectory
+::TBOK-REMOTE-PS::    $remoteBatchPath = Join-Path $remoteDirectory $remoteBatchName
+::TBOK-REMOTE-PS::    Write-Host "Remote working directory: $remoteDirectory"
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Write-Host "Copying $remoteBatchName to $ComputerName..."
 ::TBOK-REMOTE-PS::
@@ -2931,24 +2956,27 @@ exit /b 0
 ::TBOK-REMOTE-PS::    Write-Host 'Removing remote TBOK execution artifacts...'
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        param($Directory)
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        $tbokDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::        if (-not $Directory -or (Split-Path -Leaf $Directory) -notlike 'TBOK-*') { return }
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        Get-ChildItem `
-::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
-::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.log' `
-::TBOK-REMOTE-PS::            -File `
-::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::        Get-ChildItem -LiteralPath $Directory -File -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::            Where-Object { $_.Name -like 'TBOKwinOptimizer*.log' -or $_.Name -like '*.bat' } |
 ::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        Get-ChildItem `
-::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
-::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.bat' `
-::TBOK-REMOTE-PS::            -File `
-::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
-::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::        # Fallback registry backups (created when a restore point fails) are the
+::TBOK-REMOTE-PS::        # rollback path for this machine, so keep them. The folder is readable only
+::TBOK-REMOTE-PS::        # by SYSTEM and Administrators. Remove it only when nothing is left.
+::TBOK-REMOTE-PS::        if (@(Get-ChildItem -LiteralPath $Directory -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+::TBOK-REMOTE-PS::            Remove-Item -LiteralPath $Directory -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::            return $null
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::        return $Directory
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    } -ErrorAction Stop
+::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory -ErrorAction Stop |
+::TBOK-REMOTE-PS::        ForEach-Object {
+::TBOK-REMOTE-PS::            if ($_) { Write-Host "Rollback backups were kept on $ComputerName in: $_" }
+::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Write-Host 'Remote batch and log files removed successfully.'
 ::TBOK-REMOTE-PS::
