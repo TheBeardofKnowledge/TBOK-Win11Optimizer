@@ -106,11 +106,11 @@ set "ELEVATE_ARGUMENTS=%*"
     "        $batchCommand += ' ' + $env:ELEVATE_ARGUMENTS;" ^
     "    };" ^
     "    $cmdArguments = '/d /c ' + $quote + $batchCommand + $quote;" ^
-    "    Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $cmdArguments -ErrorAction Stop;" ^
-    "    exit 0;" ^
+    "    $process = Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $cmdArguments -Wait -PassThru -ErrorAction Stop;" ^
+    "    exit $process.ExitCode;" ^
     "} catch {" ^
     "    Write-Error ('Elevation launch failed: ' + $_.Exception.Message);" ^
-    "    exit 1;" ^
+    "    exit 1223;" ^
     "}"
 
 set "ELEVATE_RC=%ERRORLEVEL%"
@@ -119,13 +119,15 @@ set "ELEVATE_SCRIPT="
 set "ELEVATE_WORKDIR="
 set "ELEVATE_ARGUMENTS="
 
-if not "%ELEVATE_RC%"=="0" (
+:: 1223 (ERROR_CANCELLED) means the elevated copy never started. Any other value is the
+:: elevated run's own exit code, passed through so callers see the real result.
+if "%ELEVATE_RC%"=="1223" (
     echo Elevation was canceled or failed.
     echo This script requires an elevated administrative session.
     echo When using PowerShell remoting, start the session with sufficient administrative rights.
     exit /b 1
 )
-exit /b 0
+exit /b %ELEVATE_RC%
 
 :GotPrivileges
 ECHO Script elevated successfully
