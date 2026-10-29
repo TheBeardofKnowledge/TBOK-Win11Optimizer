@@ -3142,13 +3142,29 @@ goto f8startup
 call :LOG Restoring the much beloved F8 Startup menu availability - WHY DID THEY REMOVE THAT
 ::This is optional to enable but a good default to Restore
 ::Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
-::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu - be aware
+::bootmenupolicy is a BitLocker-validated boot setting. On a BitLocker-protected OS drive
+::that does not use Secure Boot for integrity validation, changing it makes the next boot
+::ask for the 48-digit recovery key. Across a fleet with /RESTART that can mean many
+::recovery-key prompts at once. Suspend BitLocker protectors for one reboot first so the
+::platform measurements are refreshed without a prompt; protection resumes automatically.
+set "TBOK_BDE_STATUS="
+for /f "usebackq tokens=*" %%B in (`powershell.exe -NoLogo -NoProfile -NonInteractive -Command "try{(Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop).ProtectionStatus}catch{'Unknown'}" 2^>nul`) do set "TBOK_BDE_STATUS=%%B"
+if /I "!TBOK_BDE_STATUS!"=="On" (
+    call :LOG BitLocker protection is On for %SystemDrive%. Suspending it for one reboot before the boot-menu change.
+    "%SystemRoot%\System32\manage-bde.exe" -protectors -disable %SystemDrive% -RebootCount 1 >>"%LOGFILE%" 2>&1
+    if errorlevel 1 (
+        call :LOG WARNING: Could not suspend BitLocker. Skipping the F8 boot-menu change to avoid a recovery-key prompt.
+        goto :F8startupDone
+    )
+)
 bcdedit.exe /set {default} bootmenupolicy legacy >>"%LOGFILE%" 2>&1
 if errorlevel 1 (
     call :LOG ERROR: Failed to enable the legacy F8 boot menu.
 ) else (
     call :LOG Legacy F8 boot menu enabled successfully.
 )
+:F8startupDone
+set "TBOK_BDE_STATUS="
 ECHO.
 
 :virtualmemory
