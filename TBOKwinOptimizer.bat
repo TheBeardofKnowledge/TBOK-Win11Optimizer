@@ -515,6 +515,13 @@ if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
     set "TBOK_PROFILE_BACKUP_DIR="
 ) else (
     call :LOG Fallback registry backup directory: !TBOK_PROFILE_BACKUP_DIR!
+    REM Security: this folder receives full exports of HKLM and every user hive, plus
+    REM NTUSER.DAT copies. Restrict it to SYSTEM and Administrators instead of inheriting
+    REM the permissions of the folder the script was launched from.
+    icacls "!TBOK_PROFILE_BACKUP_DIR!" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" >>"%LOGFILE%" 2>&1
+    if errorlevel 1 (
+        call :LOG WARNING: Could not restrict permissions on the fallback backup directory.
+    )
 )
 :RestorePointDiagnostics
 call :LOG Collecting restore-point diagnostics...
