@@ -4854,8 +4854,23 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	)
 
 :TheRecycleBinIsNotAfolder
-	ECHO Emptying the recycle bin... you weren't ACTUALLY storing stuff in there, were you? I hope not.
-	rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
+:: Emptying the Recycle Bin is permanent and affects every user on the PC, so it is opt-in.
+:: Noninteractive runs never empty it. Interactive runs ask, defaulting to No.
+:: TBOK_EMPTY_RECYCLE_BIN also controls the Disk Cleanup Recycle Bin handler below.
+set "TBOK_EMPTY_RECYCLE_BIN="
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Noninteractive cleanup: Recycle Bin contents for all users will be preserved.
+    goto :UserProgramsCacheCleanup
+)
+ECHO Empty the Recycle Bin for ALL users on this PC? This cannot be undone. [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
+IF ERRORLEVEL 2 (
+    call :LOG Recycle Bin contents were preserved.
+    goto :UserProgramsCacheCleanup
+)
+set "TBOK_EMPTY_RECYCLE_BIN=1"
+call :LOG Emptying the Recycle Bin for all users.
+rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
 
 :UserProgramsCacheCleanup
 	Echo Cleaning up cache from programs that are space hogs
@@ -5118,8 +5133,13 @@ call :LOG Mozilla Firefox cache cleanup completed.
 :: Old ChkDsk Files
 	REG ADD "%_RootKey%\Old ChkDsk Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
 
-:: Recycle Bin -If you store stuff in recycle bin... shame on you!
+:: Recycle Bin: only when the user chose to empty it above. Otherwise remove the flag,
+:: which earlier TBOK versions set unconditionally, so Disk Cleanup leaves it alone.
+	if defined TBOK_EMPTY_RECYCLE_BIN (
 	REG ADD "%_RootKey%\Recycle Bin" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+	) else (
+	REG DELETE "%_RootKey%\Recycle Bin" /v %_Group_No% /f	>nul 2>&1
+	)
 
 :: Retail Demo
 	REG ADD "%_RootKey%\RetailDemo Offline Content" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
