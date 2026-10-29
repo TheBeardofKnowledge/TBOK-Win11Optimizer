@@ -1,5 +1,8 @@
 # TBOK Windows Performance Optimizer
 
+<p align="center">
+<img src="https://github.com/TheBeardofKnowledge/TBOK-Win11Optimizer/blob/main/TBOK171menu.png" />
+</p>
 A business ready comprehensive Hardware-aware Windows 10 and Windows 11 configuration and cleanup script for personal PC's and managed workstations.
 
 The scripts change Windows settings, policies, services, and per-user preferences in order to improve system responsiveness, improve gaming/workstation performance, and increase user privacy.
