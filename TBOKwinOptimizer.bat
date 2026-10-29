@@ -37,6 +37,15 @@
 
 ::turn off echoing all commands
 @ECHO OFF
+::Relaunch under the native 64-bit cmd.exe when started from a 32-bit host (many RMM
+::agents and deployment tools are 32-bit). Under WOW64, System32 is redirected to
+::SysWOW64 and HKLM\SOFTWARE writes are redirected to WOW6432Node, so settings would be
+::reported as applied while landing where 64-bit Windows never reads them.
+::exit /b without a number keeps the 64-bit run's exit code.
+if defined PROCESSOR_ARCHITEW6432 if exist "%SystemRoot%\Sysnative\cmd.exe" (
+    "%SystemRoot%\Sysnative\cmd.exe" /d /c ""%~f0" %*"
+    exit /b
+)
 ::change the terminal color to something friendlier
 color f0
 
