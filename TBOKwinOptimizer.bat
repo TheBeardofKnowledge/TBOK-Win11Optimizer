@@ -5383,7 +5383,9 @@ exit /b 0
 :EXIT
 call :LOG Script exiting.
 call :CleanupTemporaryPlans
-call :Delay 10
+:: The pause only helps someone reading the console. Unattended runs (/REMOTELIST in
+:: particular, where it was added per machine) exit immediately.
+if not defined TBOK_NONINTERACTIVE call :Delay 10
 :: Return a meaningful exit code so RMM tools, /REMOTE and /REMOTELIST can see failures:
 :: 0 = success, 1 = one or more requested operations failed, 2 = invalid command line.
 set "TBOK_EXIT_RC=0"
