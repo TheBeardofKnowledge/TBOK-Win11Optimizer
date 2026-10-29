@@ -43,6 +43,19 @@ color f0
 ::enable holding variables during script,explicitely enable command extensions, disable variable expansions
 setlocal EnableExtensions DisableDelayedExpansion
 
+::Security: never resolve bare command names from the current directory.
+::cmd searches the current directory before PATH. This script calls powershell.exe, REG,
+::findstr, sc, net, choice and others by bare name, and its working directory is normally
+::the folder it was launched from (Downloads, a deployment share, or the remote staging
+::folder). Any executable or .bat/.cmd placed there under one of those names would run with
+::this script's administrative rights. Disable current-directory lookup and work from
+::System32. The script locates its own files through %~dp0, so nothing else changes.
+::TBOK_START_DIR keeps the launch directory for resolving relative /REMOTELIST paths.
+::The directory change is scoped by the SETLOCAL above and is undone when the script ends.
+set "NoDefaultCurrentDirectoryInExePath=1"
+set "TBOK_START_DIR=%CD%"
+cd /d "%SystemRoot%\System32"
+
 ::add ANSI color support
 for /f %%A in ('echo prompt $E^| cmd') do set "ESC=%%A"
 ::resets color to black background white text
@@ -2600,6 +2613,12 @@ set "RemoteListSucceeded=0"
 set "RemoteListFailed=0"
 set "RemoteListSkipped=0"
 set "RemoteListFailedHosts="
+
+:: The script runs from System32 (see the security note at the top), so first resolve a
+:: relative list path against the directory the script was launched from.
+if exist "!TBOK_START_DIR!\!RemoteListPath!" (
+    set "RemoteListPath=!TBOK_START_DIR!\!RemoteListPath!"
+)
 
 :: Resolve relative list paths beside the TBOK batch file.
 if not exist "!RemoteListPath!" (
