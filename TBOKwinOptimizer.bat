@@ -2926,10 +2926,13 @@ exit /b 0
 ::TBOK-REMOTE-PS::    if ($restartRequested) {
 ::TBOK-REMOTE-PS::        if ($remoteExitCode -eq 0) {
 ::TBOK-REMOTE-PS::            Write-Host 'Artifacts retrieved successfully.'
-::TBOK-REMOTE-PS::            Write-Host "Restarting $ComputerName in 5 seconds..."
+::TBOK-REMOTE-PS::            Write-Host "Restarting $ComputerName in 120 seconds; signed-in users are warned."
 ::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::            # A remote restart can hit a machine where someone is working. Give
+::TBOK-REMOTE-PS::            # signed-in users two minutes and a message so they can save; 5 seconds
+::TBOK-REMOTE-PS::            # with /f discarded unsaved work without warning. Cancel with shutdown /a.
 ::TBOK-REMOTE-PS::            Invoke-Command -Session $session -ScriptBlock {
-::TBOK-REMOTE-PS::                shutdown.exe /r /t 5 /f
+::TBOK-REMOTE-PS::                & "$env:SystemRoot\System32\shutdown.exe" /r /t 120 /d p:4:1 /c 'TBOK maintenance: this PC will restart in 2 minutes. Please save your work.'
 ::TBOK-REMOTE-PS::            }
 ::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::        else {
@@ -3696,8 +3699,11 @@ call :SetAllControlSetValues "Services\LanmanServer\Parameters" "IRPStackSize" "
 call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" "REG_DWORD" "10" "SystemResponsiveness"
 
-call :LOG Speed up shutdown time
-call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "3000" "WaitToKillServiceTimeout"
+call :LOG Restoring the Windows default service shutdown timeout of 5000 ms
+::3000 ms gave databases, Hyper-V, backup agents and sync clients less time to flush data
+::before Windows terminates them at shutdown. 5000 is the Windows 10 and 11 default, and
+::writing it explicitly reverses the 3000 set by earlier TBOK versions.
+call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "5000" "WaitToKillServiceTimeout"
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
 call :SetAllControlSetValues "Control\FileSystem" "LongPathsEnabled" "REG_DWORD" "1" "LongPathsEnabled"
@@ -4165,8 +4171,12 @@ call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Ex
 call :LOG Disable the people button in the taskbar
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" "PeopleBand" "REG_DWORD" "0" "PeopleBand for %BASE%"
  
-call :LOG Enable right-click menu to auto end tasks from taskbar 
-call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "AutoEndTasks" "REG_SZ" "1" "AutoEndTasks for %BASE%"
+call :LOG Removing AutoEndTasks so apps can prompt to save at sign-out and shutdown
+::AutoEndTasks=1 does not add a taskbar menu item. It makes Windows close applications
+::that block sign-out or shutdown without showing the save prompt, discarding unsaved
+::work. The taskbar End Task item is TaskbarEndTask, set earlier in this section.
+::The value is removed so profiles changed by earlier TBOK versions return to the default.
+call :DeleteRegistryValueIfPresent "%BASE%\Control Panel\Desktop" "AutoEndTasks" "AutoEndTasks for %BASE%"
 
 call :LOG Hide the meet now button on the taskbar
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" "HideSCAMeetNow" "REG_DWORD" "1" "HideSCAMeetNow for %BASE%"
@@ -4841,19 +4851,36 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Teams\Service Worker\CacheStorage\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\explorer\thumbcache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
+	REM The Office Document Cache, OfficeFileCache, holds edits waiting to upload to
+	REM OneDrive or SharePoint; it is intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
+	REM Word and Excel roaming folders are not caches. They hold AutoRecover files at the
+	REM default AutoRecover location, Excel XLSTART\PERSONAL.XLSB with personal macros, and
+	REM Word STARTUP add-ins. They are intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
+	REM OneNote's cache holds edits that have not synced yet; it is intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Windows\WebCache\*.*" >nul 2>&1
 	)
 
 :TheRecycleBinIsNotAfolder
-	ECHO Emptying the recycle bin... you weren't ACTUALLY storing stuff in there, were you? I hope not.
-	rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
+:: Emptying the Recycle Bin is permanent and affects every user on the PC, so it is opt-in.
+:: Noninteractive runs never empty it. Interactive runs ask, defaulting to No.
+:: TBOK_EMPTY_RECYCLE_BIN also controls the Disk Cleanup Recycle Bin handler below.
+set "TBOK_EMPTY_RECYCLE_BIN="
+if defined TBOK_NONINTERACTIVE (
+    call :LOG Noninteractive cleanup: Recycle Bin contents for all users will be preserved.
+    goto :UserProgramsCacheCleanup
+)
+ECHO Empty the Recycle Bin for ALL users on this PC? This cannot be undone. [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
+IF ERRORLEVEL 2 (
+    call :LOG Recycle Bin contents were preserved.
+    goto :UserProgramsCacheCleanup
+)
+set "TBOK_EMPTY_RECYCLE_BIN=1"
+call :LOG Emptying the Recycle Bin for all users.
+rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
 
 :UserProgramsCacheCleanup
 	Echo Cleaning up cache from programs that are space hogs
@@ -4873,8 +4900,10 @@ if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: iTunes mobile-device backups will be preserved.
     goto :FreakenMicrosoftTeams
 )
-ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is Y
-CHOICE /C YN /N /T 10 /D Y
+:: Default is No: these backups may be the only copy of a phone's data, and a console left
+:: unattended for 10 seconds must not delete them.
+ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :FreakenMicrosoftTeams
 IF ERRORLEVEL 1 GOTO :iOSbackups
@@ -5116,8 +5145,13 @@ call :LOG Mozilla Firefox cache cleanup completed.
 :: Old ChkDsk Files
 	REG ADD "%_RootKey%\Old ChkDsk Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
 
-:: Recycle Bin -If you store stuff in recycle bin... shame on you!
+:: Recycle Bin: only when the user chose to empty it above. Otherwise remove the flag,
+:: which earlier TBOK versions set unconditionally, so Disk Cleanup leaves it alone.
+	if defined TBOK_EMPTY_RECYCLE_BIN (
 	REG ADD "%_RootKey%\Recycle Bin" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+	) else (
+	REG DELETE "%_RootKey%\Recycle Bin" /v %_Group_No% /f	>nul 2>&1
+	)
 
 :: Retail Demo
 	REG ADD "%_RootKey%\RetailDemo Offline Content" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
@@ -5217,8 +5251,8 @@ call :LOG Previous Windows installation files were detected that can be removed.
 	ECHO	/////  Cleanup process is about to begin.  You will NOT be able to               /////
 	ECHO	/////  restore your pc to a previous installation if you continue.               /////
 	ECHO	//////////////////////////////////////////////////////////////////////////////////////
-	ECHO Are you sure you wish to continue? [Y/N] Default is Y
-	CHOICE /C YN /N /T 10 /D Y
+	ECHO Are you sure you wish to continue? [Y/N] Default is N
+	CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :BeardsweeperEND
 IF ERRORLEVEL 1 GOTO :oldwindowsinstalls
