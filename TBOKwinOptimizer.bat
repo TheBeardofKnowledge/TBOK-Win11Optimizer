@@ -106,11 +106,11 @@ set "ELEVATE_ARGUMENTS=%*"
     "        $batchCommand += ' ' + $env:ELEVATE_ARGUMENTS;" ^
     "    };" ^
     "    $cmdArguments = '/d /c ' + $quote + $batchCommand + $quote;" ^
-    "    Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $cmdArguments -ErrorAction Stop;" ^
-    "    exit 0;" ^
+    "    $process = Start-Process -FilePath $env:ComSpec -Verb RunAs -WorkingDirectory $env:ELEVATE_WORKDIR -ArgumentList $cmdArguments -Wait -PassThru -ErrorAction Stop;" ^
+    "    exit $process.ExitCode;" ^
     "} catch {" ^
     "    Write-Error ('Elevation launch failed: ' + $_.Exception.Message);" ^
-    "    exit 1;" ^
+    "    exit 1223;" ^
     "}"
 
 set "ELEVATE_RC=%ERRORLEVEL%"
@@ -119,13 +119,15 @@ set "ELEVATE_SCRIPT="
 set "ELEVATE_WORKDIR="
 set "ELEVATE_ARGUMENTS="
 
-if not "%ELEVATE_RC%"=="0" (
+:: 1223 (ERROR_CANCELLED) means the elevated copy never started. Any other value is the
+:: elevated run's own exit code, passed through so callers see the real result.
+if "%ELEVATE_RC%"=="1223" (
     echo Elevation was canceled or failed.
     echo This script requires an elevated administrative session.
     echo When using PowerShell remoting, start the session with sufficient administrative rights.
     exit /b 1
 )
-exit /b 0
+exit /b %ELEVATE_RC%
 
 :GotPrivileges
 ECHO Script elevated successfully
@@ -142,6 +144,13 @@ if errorlevel 1 (
 )
 ECHO Analyzing System to create optimized plan, please wait...
 call :ShowAnalysisProgress 0 "Starting system analysis"
+
+:: Capture the script's own location while delayed expansion is still disabled.
+:: After SETLOCAL EnableDelayedExpansion, %~dp0 and %~f0 are expanded first and any !
+:: in the folder name is then consumed by delayed expansion, corrupting log, backup and
+:: remote paths. !TBOK_SCRIPT_DIR! and !TBOK_SCRIPT_FILE! are expanded safely.
+set "TBOK_SCRIPT_DIR=%~dp0"
+set "TBOK_SCRIPT_FILE=%~f0"
 
 :BEGIN-SCRIPT-HELPERS
 ::These are items that are called later in the script to perform a function - trims the code size for repeat items
@@ -192,15 +201,15 @@ set "LOGFILE="
 :: User explicitly requested a fresh logfile.
 if "!TBOK_NEWLOG_REQUESTED!"=="0" (
     for /f "usebackq delims=" %%L in (`
-    dir /b /a-d /o-d "%~dp0TBOKwinOptimizer-%COMPUTERNAME%-*.log" 2^>nul
+    dir /b /a-d /o-d "!TBOK_SCRIPT_DIR!TBOKwinOptimizer-%COMPUTERNAME%-*.log" 2^>nul
 `) do (
         if not defined LOGFILE (
-            set "LOGFILE=%~dp0%%L"
+            set "LOGFILE=!TBOK_SCRIPT_DIR!%%L"
         )
     )
 )
 if not defined LOGFILE (
-    set "LOGFILE=%~dp0TBOKwinOptimizer-%COMPUTERNAME%-!TBOK_TIMESTAMP!.log"
+    set "LOGFILE=!TBOK_SCRIPT_DIR!TBOKwinOptimizer-%COMPUTERNAME%-!TBOK_TIMESTAMP!.log"
     set "TBOK_LOG_WAS_CREATED=1"
 )
 if not exist "!LOGFILE!" (
@@ -482,7 +491,7 @@ if "!RestorePointRC!"=="0" (
     exit /b 0
 )
 set "TBOK_RESTORE_POINT_FAILED=1"
-set "TBOK_PROFILE_BACKUP_DIR=%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
+set "TBOK_PROFILE_BACKUP_DIR=!TBOK_SCRIPT_DIR!TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
 call :LOG WARNING: Could not create a restore point.
 call :LOG Creating fallback registry backup directory...
 
@@ -689,7 +698,7 @@ for /f "delims=" %%A in (
 )
 
 if defined TBOK_TODAY (
-    for /d %%D in ("%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TODAY!-*") do (
+    for /d %%D in ("!TBOK_SCRIPT_DIR!TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TODAY!-*") do (
         if exist "%%~fD\HKLM-Before-TBOK.reg" (
             if exist "%%~fD\HKCU-ExecutionAccount-Before-TBOK.reg" (
                 set "TBOK_BACKUPS_ALREADY_EXIST=1"
@@ -1447,18 +1456,9 @@ if /I not "!TBOK_CS_DEFAULT!"=="!TBOK_CS_CURRENT!" (
 
     if errorlevel 1 set "TBOK_CS_WRITE_FAILED=1"
 )
-if /I not "!TBOK_CS_LASTKNOWNGOOD!"=="!TBOK_CS_CURRENT!" if /I not "!TBOK_CS_LASTKNOWNGOOD!"=="!TBOK_CS_DEFAULT!" (
-    call :WriteControlSetValue ^
-        "!TBOK_CS_LASTKNOWNGOOD!" ^
-        "!TBOK_CS_RELATIVE_PATH!" ^
-        "!TBOK_CS_VALUE_NAME!" ^
-        "!TBOK_CS_VALUE_TYPE!" ^
-        "!TBOK_CS_VALUE_DATA!" ^
-        "LastKnownGood" ^
-        "!TBOK_CS_DESCRIPTION!"
-
-    if errorlevel 1 set "TBOK_CS_WRITE_FAILED=1"
-)
+:: The LastKnownGood control set is deliberately not written. It is the configuration
+:: Windows falls back to when a change makes the system unbootable, so it must keep the
+:: state from before these changes. Writing to it would remove that recovery path.
 if "!TBOK_CS_WRITE_FAILED!"=="1" (
     endlocal
     exit /b 1
@@ -1637,6 +1637,32 @@ if not "%RegWriteRC%"=="0" (
         )
         exit /b 1
     )
+)
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+)
+exit /b 0
+
+:SetRegistryDefaultEmptyQuiet
+:: Creates a key and sets its (Default) value to an empty string.
+:: In profile-summary mode, successful writes count as Applied.
+setlocal DisableDelayedExpansion
+if "%~1"=="" (
+    endlocal
+    call :LOG ERROR: SetRegistryDefaultEmptyQuiet was called without a registry path.
+    exit /b 2
+)
+REG ADD "%~1" /ve /t REG_SZ /d "" /f >nul 2>>"%LOGFILE%"
+if errorlevel 1 (
+    if defined TBOK_PROFILE_SUMMARY_MODE (
+        endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+    ) else (
+        endlocal
+    )
+    call :LOG ERROR: Failed to configure %~2.
+    exit /b 1
 )
 if defined TBOK_PROFILE_SUMMARY_MODE (
     endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
@@ -2539,7 +2565,7 @@ if exist "!TBOK_REMOTE_CONTROLLER_RAW!" (
     del /q "!TBOK_REMOTE_CONTROLLER_RAW!" >nul 2>&1
 )
 
-findstr /B /L /C:"::TBOK-REMOTE-PS::" "%~f0" >"!TBOK_REMOTE_CONTROLLER_RAW!"
+findstr /B /L /C:"::TBOK-REMOTE-PS::" "!TBOK_SCRIPT_FILE!" >"!TBOK_REMOTE_CONTROLLER_RAW!"
 
 if errorlevel 1 (
     echo ERROR: The embedded remote-controller payload was not found.
@@ -2603,8 +2629,8 @@ set "RemoteListFailedHosts="
 
 :: Resolve relative list paths beside the TBOK batch file.
 if not exist "!RemoteListPath!" (
-    if exist "%~dp0!RemoteListPath!" (
-        set "RemoteListPath=%~dp0!RemoteListPath!"
+    if exist "!TBOK_SCRIPT_DIR!!RemoteListPath!" (
+        set "RemoteListPath=!TBOK_SCRIPT_DIR!!RemoteListPath!"
     )
 )
 
@@ -2701,12 +2727,12 @@ echo TBOK Remote Optimization
 echo ================================================================
 echo Destination : !TBOK_REMOTE_HOST!
 echo Operations  : !TBOK_REMOTE_OPERATION_ARGS!
-echo Local source: %~f0
-echo Local output: %~dp0
+echo Local source: !TBOK_SCRIPT_FILE!
+echo Local output: !TBOK_SCRIPT_DIR!
 echo ================================================================
 echo.
 set "TBOK_REMOTE_ARGUMENT_TEXT=!TBOK_REMOTE_OPERATION_ARGS!"
-set "TBOK_LOCAL_OUTPUT_PATH=%~dp0"
+set "TBOK_LOCAL_OUTPUT_PATH=!TBOK_SCRIPT_DIR!"
 :: Remove the trailing backslash before passing the path to PowerShell.
 :: A quoted native argument ending in \" can consume the closing quote
 :: and merge -ArgumentText parameter into the path.
@@ -2717,7 +2743,7 @@ if "!TBOK_LOCAL_OUTPUT_PATH:~-1!"=="\" (
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
     -File "!TBOK_REMOTE_CONTROLLER!" ^
     -ComputerName "!TBOK_REMOTE_HOST!" ^
-    -BatchPath "%~f0" ^
+    -BatchPath "!TBOK_SCRIPT_FILE!" ^
     -LocalOutputPath "!TBOK_LOCAL_OUTPUT_PATH!" ^
     -ArgumentText "!TBOK_REMOTE_ARGUMENT_TEXT!"
 
@@ -3759,7 +3785,9 @@ call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection"
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" "DisabledByGroupPolicy" "REG_DWORD" "1" "DisabledByGroupPolicy"
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" "Disabled" "REG_DWORD" "1" "Disable Error Reporting"
 
-call :LOG Disable Powershell telemetry
+call :LOG Turning off saving of Recall snapshots
+::DisableAIDataAnalysis is the "Turn off saving snapshots for use with Recall" policy
+::(Windows 11 24H2 build 26100.3915 and later). It is not related to PowerShell telemetry.
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis" "REG_DWORD" "1" "DisableAIDataAnalysis"
 
 call :LOG Disabling Windows Updated DeliveryOptimization network bandwidth use through Registry
@@ -4033,7 +4061,11 @@ call :LOG Preference -Enabling end task from Taskbar - super useful to avoid ope
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" "TaskbarEndTask" "REG_DWORD" "1" "TaskbarEndTask for %BASE%"
 
 call :LOG Preference -Enabling show full right-click context menus in Windows 11
-call :EnsureRegistryKey "%BASE%\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" "Classic context-menu InprocServer32 key for %BASE%"
+::The classic menu override needs the InprocServer32 key with an empty (Default) value;
+::creating the key alone is not enough. REG ADD /ve sets the default value.
+::Note: HKCU\Software\Classes is stored in UsrClass.dat, so this takes effect only for
+::signed-in users processed through HKEY_USERS, not for offline or Default profile hives.
+call :SetRegistryDefaultEmptyQuiet "%BASE%\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" "Classic context-menu InprocServer32 default value for %BASE%"
 
 call :LOG Disabling bing search in start menu -keep the start menu local
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Search" "BingSearchEnabled" "REG_DWORD" "0" "BingSearchEnabled for %BASE%"
@@ -5186,7 +5218,7 @@ if not "!CleanMgrRC!"=="0" exit /b 1
 if not "!ComponentCleanupRC!"=="0" exit /b 1
 if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: restore-point and previous-Windows-install removal was skipped.
-    goto :END
+    goto :BeardsweeperEND
 )
 
 :PreviousWindowsInstalls
@@ -5299,6 +5331,11 @@ call :LOG ***********************ALL FINISHED!***********************
 
 if defined TBOK_NONINTERACTIVE (
     if defined TBOK_RUN_RESTART (
+        if "!TBOK_SEQUENCE_FAILED!"=="1" (
+            call :LOG WARNING: /RESTART was requested, but one or more operations failed.
+            call :LOG WARNING: The computer will not restart. Review this log first.
+            goto :EXIT
+        )
         call :LOG Noninteractive execution completed.
         call :LOG /RESTART specified. The computer will now restart.
         goto :RESTART
@@ -5346,6 +5383,12 @@ exit /b 0
 :EXIT
 call :LOG Script exiting.
 call :CleanupTemporaryPlans
-call :Delay 10
-endlocal
-exit /b 0
+:: The pause only helps someone reading the console. Unattended runs (/REMOTELIST in
+:: particular, where it was added per machine) exit immediately.
+if not defined TBOK_NONINTERACTIVE call :Delay 10
+:: Return a meaningful exit code so RMM tools, /REMOTE and /REMOTELIST can see failures:
+:: 0 = success, 1 = one or more requested operations failed, 2 = invalid command line.
+set "TBOK_EXIT_RC=0"
+if "!TBOK_SEQUENCE_FAILED!"=="1" set "TBOK_EXIT_RC=1"
+if "!TBOK_ARGUMENT_ERROR!"=="1" set "TBOK_EXIT_RC=2"
+endlocal & exit /b %TBOK_EXIT_RC%
