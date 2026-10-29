@@ -4841,7 +4841,8 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Teams\Service Worker\CacheStorage\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\explorer\thumbcache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
+	REM The Office Document Cache, OfficeFileCache, holds edits waiting to upload to
+	REM OneDrive or SharePoint; it is intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
 	REM Word and Excel roaming folders are not caches. They hold AutoRecover files at the
 	REM default AutoRecover location, Excel XLSTART\PERSONAL.XLSB with personal macros, and
