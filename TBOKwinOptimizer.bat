@@ -4890,8 +4890,10 @@ if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: iTunes mobile-device backups will be preserved.
     goto :FreakenMicrosoftTeams
 )
-ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is Y
-CHOICE /C YN /N /T 10 /D Y
+:: Default is No: these backups may be the only copy of a phone's data, and a console left
+:: unattended for 10 seconds must not delete them.
+ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :FreakenMicrosoftTeams
 IF ERRORLEVEL 1 GOTO :iOSbackups
