@@ -1947,8 +1947,8 @@ call :LOG Prefetch target: !TBOK_PREFETCH_POLICY!
 call :LOG Hibernation target: !TBOK_HIBERNATION_POLICY!
 call :LOG Page-file target: !TBOK_PAGEFILE_POLICY!
 call :LOG Gaming power-plan target: !TBOK_POWERPLAN_POLICY!
-call :ShowAnalysisProgress 100 "Optimization policy ready"
 set "TBOK_POLICY_ALREADY_RESOLVED=1"
+call :ShowAnalysisProgress 100 "Optimization policy ready"
 exit /b 0
 
 :: Configure MMAgent features only for the low-memory profile.
@@ -2279,9 +2279,9 @@ if "!SystemProfileFailed!"=="1" (
     exit /b 1
 )
 
-call :ShowAnalysisProgress 85 "Hardware profile complete"
 set "TBOK_SYSTEM_PROFILE_READY=1"
 set "SystemProfileFailed="
+call :ShowAnalysisProgress 85 "Hardware profile complete"
 exit /b 0
 
 :InitializeTemporaryPlans
@@ -2604,7 +2604,7 @@ if errorlevel 1 (
 set "TBOK_REMOTE_CONTROLLER_RAW_ENV=!TBOK_REMOTE_CONTROLLER_RAW!"
 set "TBOK_REMOTE_CONTROLLER_ENV=!TBOK_REMOTE_CONTROLLER!"
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$prefix='::TBOK-REMOTE-PS::';$source=$env:TBOK_REMOTE_CONTROLLER_RAW_ENV;$destination=$env:TBOK_REMOTE_CONTROLLER_ENV;try{$lines=Get-Content -LiteralPath $source -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};Set-Content -LiteralPath $destination -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0}catch{Write-Output ('ERROR: Remote controller creation failed: '+$_.Exception.Message);exit 1}"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$prefix='::TBOK-REMOTE-PS::';$source=$env:TBOK_REMOTE_CONTROLLER_RAW_ENV;$destination=$env:TBOK_REMOTE_CONTROLLER_ENV;try{$lines=Get-Content -LiteralPath $source -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};Set-Content -LiteralPath $destination -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0}catch{Write-Output ('ERROR: Remote controller creation failed: '+$_.Exception.Message);exit 1}"
 
 set "BuildRemoteControllerRC=!ERRORLEVEL!"
 
@@ -2767,7 +2767,7 @@ if "!TBOK_LOCAL_OUTPUT_PATH:~-1!"=="\" (
     set "TBOK_LOCAL_OUTPUT_PATH=!TBOK_LOCAL_OUTPUT_PATH:~0,-1!"
 )
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
+powershell.exe -NoLogo -NoProfile -NonInteractive ^
     -File "!TBOK_REMOTE_CONTROLLER!" ^
     -ComputerName "!TBOK_REMOTE_HOST!" ^
     -BatchPath "%~f0" ^
@@ -3023,6 +3023,7 @@ if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
 if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
 if not defined TBOK_SYSMAIN_MODE set "TBOK_SYSMAIN_MODE=unchanged"
 if not defined TBOK_MMAGENT_POLICY set "TBOK_MMAGENT_POLICY=Unchanged"
+if not defined TBOK_PREFETCH_POLICY set "TBOK_PREFETCH_POLICY=Unchanged"
 if not defined TBOK_LOW_MEMORY_POLICY set "TBOK_LOW_MEMORY_POLICY=Unknown"
 if not defined TBOK_HIBERNATION_POLICY set "TBOK_HIBERNATION_POLICY=Unchanged"
 if not defined TBOK_PAGEFILE_POLICY set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -5023,8 +5024,8 @@ IF ERRORLEVEL 1 GOTO :iOSbackups
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\cache\*"		>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\databases\*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\gpucache\*"		>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\indexeddb\*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\Local Storage\*"	>nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\indexeddb\*"	>nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\Local Storage\*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\tmp\*"		>nul 2>&1
 	)
 
