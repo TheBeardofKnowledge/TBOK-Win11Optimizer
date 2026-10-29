@@ -145,6 +145,13 @@ if errorlevel 1 (
 ECHO Analyzing System to create optimized plan, please wait...
 call :ShowAnalysisProgress 0 "Starting system analysis"
 
+:: Capture the script's own location while delayed expansion is still disabled.
+:: After SETLOCAL EnableDelayedExpansion, %~dp0 and %~f0 are expanded first and any !
+:: in the folder name is then consumed by delayed expansion, corrupting log, backup and
+:: remote paths. !TBOK_SCRIPT_DIR! and !TBOK_SCRIPT_FILE! are expanded safely.
+set "TBOK_SCRIPT_DIR=%~dp0"
+set "TBOK_SCRIPT_FILE=%~f0"
+
 :BEGIN-SCRIPT-HELPERS
 ::These are items that are called later in the script to perform a function - trims the code size for repeat items
 ::enable extended script logic and delayed expansion
@@ -194,15 +201,15 @@ set "LOGFILE="
 :: User explicitly requested a fresh logfile.
 if "!TBOK_NEWLOG_REQUESTED!"=="0" (
     for /f "usebackq delims=" %%L in (`
-    dir /b /a-d /o-d "%~dp0TBOKwinOptimizer-%COMPUTERNAME%-*.log" 2^>nul
+    dir /b /a-d /o-d "!TBOK_SCRIPT_DIR!TBOKwinOptimizer-%COMPUTERNAME%-*.log" 2^>nul
 `) do (
         if not defined LOGFILE (
-            set "LOGFILE=%~dp0%%L"
+            set "LOGFILE=!TBOK_SCRIPT_DIR!%%L"
         )
     )
 )
 if not defined LOGFILE (
-    set "LOGFILE=%~dp0TBOKwinOptimizer-%COMPUTERNAME%-!TBOK_TIMESTAMP!.log"
+    set "LOGFILE=!TBOK_SCRIPT_DIR!TBOKwinOptimizer-%COMPUTERNAME%-!TBOK_TIMESTAMP!.log"
     set "TBOK_LOG_WAS_CREATED=1"
 )
 if not exist "!LOGFILE!" (
@@ -484,7 +491,7 @@ if "!RestorePointRC!"=="0" (
     exit /b 0
 )
 set "TBOK_RESTORE_POINT_FAILED=1"
-set "TBOK_PROFILE_BACKUP_DIR=%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
+set "TBOK_PROFILE_BACKUP_DIR=!TBOK_SCRIPT_DIR!TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TIMESTAMP!"
 call :LOG WARNING: Could not create a restore point.
 call :LOG Creating fallback registry backup directory...
 
@@ -691,7 +698,7 @@ for /f "delims=" %%A in (
 )
 
 if defined TBOK_TODAY (
-    for /d %%D in ("%~dp0TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TODAY!-*") do (
+    for /d %%D in ("!TBOK_SCRIPT_DIR!TBOK-RegistryBackups-%COMPUTERNAME%-!TBOK_TODAY!-*") do (
         if exist "%%~fD\HKLM-Before-TBOK.reg" (
             if exist "%%~fD\HKCU-ExecutionAccount-Before-TBOK.reg" (
                 set "TBOK_BACKUPS_ALREADY_EXIST=1"
@@ -2532,7 +2539,7 @@ if exist "!TBOK_REMOTE_CONTROLLER_RAW!" (
     del /q "!TBOK_REMOTE_CONTROLLER_RAW!" >nul 2>&1
 )
 
-findstr /B /L /C:"::TBOK-REMOTE-PS::" "%~f0" >"!TBOK_REMOTE_CONTROLLER_RAW!"
+findstr /B /L /C:"::TBOK-REMOTE-PS::" "!TBOK_SCRIPT_FILE!" >"!TBOK_REMOTE_CONTROLLER_RAW!"
 
 if errorlevel 1 (
     echo ERROR: The embedded remote-controller payload was not found.
@@ -2596,8 +2603,8 @@ set "RemoteListFailedHosts="
 
 :: Resolve relative list paths beside the TBOK batch file.
 if not exist "!RemoteListPath!" (
-    if exist "%~dp0!RemoteListPath!" (
-        set "RemoteListPath=%~dp0!RemoteListPath!"
+    if exist "!TBOK_SCRIPT_DIR!!RemoteListPath!" (
+        set "RemoteListPath=!TBOK_SCRIPT_DIR!!RemoteListPath!"
     )
 )
 
@@ -2694,12 +2701,12 @@ echo TBOK Remote Optimization
 echo ================================================================
 echo Destination : !TBOK_REMOTE_HOST!
 echo Operations  : !TBOK_REMOTE_OPERATION_ARGS!
-echo Local source: %~f0
-echo Local output: %~dp0
+echo Local source: !TBOK_SCRIPT_FILE!
+echo Local output: !TBOK_SCRIPT_DIR!
 echo ================================================================
 echo.
 set "TBOK_REMOTE_ARGUMENT_TEXT=!TBOK_REMOTE_OPERATION_ARGS!"
-set "TBOK_LOCAL_OUTPUT_PATH=%~dp0"
+set "TBOK_LOCAL_OUTPUT_PATH=!TBOK_SCRIPT_DIR!"
 :: Remove the trailing backslash before passing the path to PowerShell.
 :: A quoted native argument ending in \" can consume the closing quote
 :: and merge -ArgumentText parameter into the path.
@@ -2710,7 +2717,7 @@ if "!TBOK_LOCAL_OUTPUT_PATH:~-1!"=="\" (
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
     -File "!TBOK_REMOTE_CONTROLLER!" ^
     -ComputerName "!TBOK_REMOTE_HOST!" ^
-    -BatchPath "%~f0" ^
+    -BatchPath "!TBOK_SCRIPT_FILE!" ^
     -LocalOutputPath "!TBOK_LOCAL_OUTPUT_PATH!" ^
     -ArgumentText "!TBOK_REMOTE_ARGUMENT_TEXT!"
 
