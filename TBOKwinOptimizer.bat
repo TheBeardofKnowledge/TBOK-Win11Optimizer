@@ -934,8 +934,8 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "                    $currentMode = 'delayed-auto';" ^
     "                };" ^
     "            };" ^
-    "            if ($currentMode -eq 'disabled' -and $requestedMode -eq 'demand') {" ^
-    "                Write-Output ('PRESERVED DISABLED: ' + $service.DisplayName + ' [' + $service.Name + '] remained disabled; requested mode was demand');" ^
+    "            if ($currentMode -eq 'disabled' -and $requestedMode -ne 'disabled') {" ^
+    "                Write-Output ('PRESERVED DISABLED: ' + $service.DisplayName + ' [' + $service.Name + '] was Disabled; leaving it Disabled (requested ' + $requestedMode + ')');" ^
     "                $configured[$key] = 'disabled';" ^
     "                $preservedDisabledCount++;" ^
     "                continue;" ^
