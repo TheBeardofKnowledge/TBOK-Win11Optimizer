@@ -4651,12 +4651,13 @@ if not "!WinGetProviderRC!"=="0" (
     call :LOG ERROR: NuGet package-provider installation or verification failed. Exit code: !WinGetProviderRC!.
     exit /b 1
 )
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Install-Module -Name Microsoft.WinGet.Client -Force -ErrorAction Stop" >>"%LOGFILE%" 2>&1
-set "WinGetModuleRC=!ERRORLEVEL!"
-if not "!WinGetModuleRC!"=="0" (
-    call :LOG ERROR: Microsoft.WinGet.Client installation or update failed. Exit code: !WinGetModuleRC!.
-    exit /b 1
-)
+:: Note: this routine calls winget.exe directly. winget is a per-user app execution alias
+:: and is not on PATH for the SYSTEM account or many WinRM sessions, so /REMOTE /WINGET can
+:: fail to find it on some machines. A future change can bootstrap it with the
+:: Microsoft.WinGet.Client module (Repair-WinGetPackageManager) so it resolves in session 0.
+:: The earlier Install-Module of Microsoft.WinGet.Client was removed because nothing used
+:: the module: it was installed from the PowerShell Gallery on every run, which is slow and
+:: can fail on hosts without Gallery access, for no effect.
 
 call :LOG Searching for and updating existing installed packages
 
@@ -4809,10 +4810,16 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 :WindowsTempFilesCleanup
 	ECHO Deleting all System temporary files
 	DEL /S /Q /F "%systemroot%\Temp\*.*" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\Prefetch\*.*" >nul 2>&1
+	REM The Prefetch folder is intentionally not cleared. The optimize routine sets the
+	REM Windows Prefetch policy by RAM and disk type; wiping Prefetch here undoes that and
+	REM slows the next several boots and first app launches while it is rebuilt. SSDs are
+	REM not helped by clearing it.
 	DEL /S /Q /F "%systemroot%\LiveKernelReports\*.dmp"	>nul 2>&1
 	DEL /S /Q /F "%systemroot%\appcompat\backuptest\*.*" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\System32\sru\*.dat" >nul 2>&1
+	REM %systemroot%\System32\sru holds the System Resource Usage Monitor database. It
+	REM backs the Task Manager app history, the network Data Usage page and battery-use
+	REM history. The optimize routine enables the Ndu service specifically to fix the Data
+	REM Usage graph, so this database and its logs are intentionally not deleted.
 
 :WindowsLogs
 	ECHO Cleaning Windows Log Files
@@ -4824,7 +4831,6 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%systemroot%\Logs\MeasuredBoot\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\SoftwareDistribution\DataStore\Logs\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\runSW.log" >nul 2>&1
-	DEL /S /Q /F "%systemroot%\system32\sru\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\WindowsUpdate\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\*.LOG" >nul 2>&1
 	DEL /S /Q /F "%systemdrive%\ProgramData\USOshared\Logs\User\*.*" >nul 2>&1
