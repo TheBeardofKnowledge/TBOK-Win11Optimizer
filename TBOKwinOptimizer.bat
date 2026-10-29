@@ -4843,8 +4843,9 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
+	REM Word and Excel roaming folders are not caches. They hold AutoRecover files at the
+	REM default AutoRecover location, Excel XLSTART\PERSONAL.XLSB with personal macros, and
+	REM Word STARTUP add-ins. They are intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
