@@ -5299,6 +5299,11 @@ call :LOG ***********************ALL FINISHED!***********************
 
 if defined TBOK_NONINTERACTIVE (
     if defined TBOK_RUN_RESTART (
+        if "!TBOK_SEQUENCE_FAILED!"=="1" (
+            call :LOG WARNING: /RESTART was requested, but one or more operations failed.
+            call :LOG WARNING: The computer will not restart. Review this log first.
+            goto :EXIT
+        )
         call :LOG Noninteractive execution completed.
         call :LOG /RESTART specified. The computer will now restart.
         goto :RESTART
@@ -5347,5 +5352,9 @@ exit /b 0
 call :LOG Script exiting.
 call :CleanupTemporaryPlans
 call :Delay 10
-endlocal
-exit /b 0
+:: Return a meaningful exit code so RMM tools, /REMOTE and /REMOTELIST can see failures:
+:: 0 = success, 1 = one or more requested operations failed, 2 = invalid command line.
+set "TBOK_EXIT_RC=0"
+if "!TBOK_SEQUENCE_FAILED!"=="1" set "TBOK_EXIT_RC=1"
+if "!TBOK_ARGUMENT_ERROR!"=="1" set "TBOK_EXIT_RC=2"
+endlocal & exit /b %TBOK_EXIT_RC%
