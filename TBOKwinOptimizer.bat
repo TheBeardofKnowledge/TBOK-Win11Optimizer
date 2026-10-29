@@ -1645,6 +1645,32 @@ if defined TBOK_PROFILE_SUMMARY_MODE (
 )
 exit /b 0
 
+:SetRegistryDefaultEmptyQuiet
+:: Creates a key and sets its (Default) value to an empty string.
+:: In profile-summary mode, successful writes count as Applied.
+setlocal DisableDelayedExpansion
+if "%~1"=="" (
+    endlocal
+    call :LOG ERROR: SetRegistryDefaultEmptyQuiet was called without a registry path.
+    exit /b 2
+)
+REG ADD "%~1" /ve /t REG_SZ /d "" /f >nul 2>>"%LOGFILE%"
+if errorlevel 1 (
+    if defined TBOK_PROFILE_SUMMARY_MODE (
+        endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
+    ) else (
+        endlocal
+    )
+    call :LOG ERROR: Failed to configure %~2.
+    exit /b 1
+)
+if defined TBOK_PROFILE_SUMMARY_MODE (
+    endlocal & set /a "TBOK_PROFILE_APPLIED+=1" >nul 2>&1
+) else (
+    endlocal
+)
+exit /b 0
+
 :EnsureRegistryKey
 :: Creates or verifies a registry key.
 setlocal DisableDelayedExpansion
@@ -4033,7 +4059,11 @@ call :LOG Preference -Enabling end task from Taskbar - super useful to avoid ope
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" "TaskbarEndTask" "REG_DWORD" "1" "TaskbarEndTask for %BASE%"
 
 call :LOG Preference -Enabling show full right-click context menus in Windows 11
-call :EnsureRegistryKey "%BASE%\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" "Classic context-menu InprocServer32 key for %BASE%"
+::The classic menu override needs the InprocServer32 key with an empty (Default) value;
+::creating the key alone is not enough. REG ADD /ve sets the default value.
+::Note: HKCU\Software\Classes is stored in UsrClass.dat, so this takes effect only for
+::signed-in users processed through HKEY_USERS, not for offline or Default profile hives.
+call :SetRegistryDefaultEmptyQuiet "%BASE%\SOFTWARE\CLASSES\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" "Classic context-menu InprocServer32 default value for %BASE%"
 
 call :LOG Disabling bing search in start menu -keep the start menu local
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Search" "BingSearchEnabled" "REG_DWORD" "0" "BingSearchEnabled for %BASE%"
