@@ -1449,18 +1449,9 @@ if /I not "!TBOK_CS_DEFAULT!"=="!TBOK_CS_CURRENT!" (
 
     if errorlevel 1 set "TBOK_CS_WRITE_FAILED=1"
 )
-if /I not "!TBOK_CS_LASTKNOWNGOOD!"=="!TBOK_CS_CURRENT!" if /I not "!TBOK_CS_LASTKNOWNGOOD!"=="!TBOK_CS_DEFAULT!" (
-    call :WriteControlSetValue ^
-        "!TBOK_CS_LASTKNOWNGOOD!" ^
-        "!TBOK_CS_RELATIVE_PATH!" ^
-        "!TBOK_CS_VALUE_NAME!" ^
-        "!TBOK_CS_VALUE_TYPE!" ^
-        "!TBOK_CS_VALUE_DATA!" ^
-        "LastKnownGood" ^
-        "!TBOK_CS_DESCRIPTION!"
-
-    if errorlevel 1 set "TBOK_CS_WRITE_FAILED=1"
-)
+:: The LastKnownGood control set is deliberately not written. It is the configuration
+:: Windows falls back to when a change makes the system unbootable, so it must keep the
+:: state from before these changes. Writing to it would remove that recovery path.
 if "!TBOK_CS_WRITE_FAILED!"=="1" (
     endlocal
     exit /b 1
