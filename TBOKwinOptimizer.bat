@@ -5186,7 +5186,7 @@ if not "!CleanMgrRC!"=="0" exit /b 1
 if not "!ComponentCleanupRC!"=="0" exit /b 1
 if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: restore-point and previous-Windows-install removal was skipped.
-    goto :END
+    goto :BeardsweeperEND
 )
 
 :PreviousWindowsInstalls
