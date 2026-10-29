@@ -4651,12 +4651,13 @@ if not "!WinGetProviderRC!"=="0" (
     call :LOG ERROR: NuGet package-provider installation or verification failed. Exit code: !WinGetProviderRC!.
     exit /b 1
 )
-powershell.exe -NoLogo -NoProfile -NonInteractive -Command "Install-Module -Name Microsoft.WinGet.Client -Force -ErrorAction Stop" >>"%LOGFILE%" 2>&1
-set "WinGetModuleRC=!ERRORLEVEL!"
-if not "!WinGetModuleRC!"=="0" (
-    call :LOG ERROR: Microsoft.WinGet.Client installation or update failed. Exit code: !WinGetModuleRC!.
-    exit /b 1
-)
+:: Note: this routine calls winget.exe directly. winget is a per-user app execution alias
+:: and is not on PATH for the SYSTEM account or many WinRM sessions, so /REMOTE /WINGET can
+:: fail to find it on some machines. A future change can bootstrap it with the
+:: Microsoft.WinGet.Client module (Repair-WinGetPackageManager) so it resolves in session 0.
+:: The earlier Install-Module of Microsoft.WinGet.Client was removed because nothing used
+:: the module: it was installed from the PowerShell Gallery on every run, which is slow and
+:: can fail on hosts without Gallery access, for no effect.
 
 call :LOG Searching for and updating existing installed packages
 
