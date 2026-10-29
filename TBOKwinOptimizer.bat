@@ -3696,8 +3696,11 @@ call :SetAllControlSetValues "Services\LanmanServer\Parameters" "IRPStackSize" "
 call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually clamps it to 20 - Microsoft Docs
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" "REG_DWORD" "10" "SystemResponsiveness"
 
-call :LOG Speed up shutdown time
-call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "3000" "WaitToKillServiceTimeout"
+call :LOG Restoring the Windows default service shutdown timeout of 5000 ms
+::3000 ms gave databases, Hyper-V, backup agents and sync clients less time to flush data
+::before Windows terminates them at shutdown. 5000 is the Windows 10 and 11 default, and
+::writing it explicitly reverses the 3000 set by earlier TBOK versions.
+call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "5000" "WaitToKillServiceTimeout"
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
 call :SetAllControlSetValues "Control\FileSystem" "LongPathsEnabled" "REG_DWORD" "1" "LongPathsEnabled"
