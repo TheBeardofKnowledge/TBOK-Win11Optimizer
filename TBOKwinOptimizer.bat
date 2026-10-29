@@ -2926,10 +2926,13 @@ exit /b 0
 ::TBOK-REMOTE-PS::    if ($restartRequested) {
 ::TBOK-REMOTE-PS::        if ($remoteExitCode -eq 0) {
 ::TBOK-REMOTE-PS::            Write-Host 'Artifacts retrieved successfully.'
-::TBOK-REMOTE-PS::            Write-Host "Restarting $ComputerName in 5 seconds..."
+::TBOK-REMOTE-PS::            Write-Host "Restarting $ComputerName in 120 seconds; signed-in users are warned."
 ::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::            # A remote restart can hit a machine where someone is working. Give
+::TBOK-REMOTE-PS::            # signed-in users two minutes and a message so they can save; 5 seconds
+::TBOK-REMOTE-PS::            # with /f discarded unsaved work without warning. Cancel with shutdown /a.
 ::TBOK-REMOTE-PS::            Invoke-Command -Session $session -ScriptBlock {
-::TBOK-REMOTE-PS::                shutdown.exe /r /t 5 /f
+::TBOK-REMOTE-PS::                & "$env:SystemRoot\System32\shutdown.exe" /r /t 120 /d p:4:1 /c 'TBOK maintenance: this PC will restart in 2 minutes. Please save your work.'
 ::TBOK-REMOTE-PS::            }
 ::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::        else {
