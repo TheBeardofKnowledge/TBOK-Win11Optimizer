@@ -4165,8 +4165,12 @@ call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Ex
 call :LOG Disable the people button in the taskbar
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" "PeopleBand" "REG_DWORD" "0" "PeopleBand for %BASE%"
  
-call :LOG Enable right-click menu to auto end tasks from taskbar 
-call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "AutoEndTasks" "REG_SZ" "1" "AutoEndTasks for %BASE%"
+call :LOG Removing AutoEndTasks so apps can prompt to save at sign-out and shutdown
+::AutoEndTasks=1 does not add a taskbar menu item. It makes Windows close applications
+::that block sign-out or shutdown without showing the save prompt, discarding unsaved
+::work. The taskbar End Task item is TaskbarEndTask, set earlier in this section.
+::The value is removed so profiles changed by earlier TBOK versions return to the default.
+call :DeleteRegistryValueIfPresent "%BASE%\Control Panel\Desktop" "AutoEndTasks" "AutoEndTasks for %BASE%"
 
 call :LOG Hide the meet now button on the taskbar
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" "HideSCAMeetNow" "REG_DWORD" "1" "HideSCAMeetNow for %BASE%"
