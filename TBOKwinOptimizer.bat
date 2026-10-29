@@ -3785,7 +3785,9 @@ call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection"
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" "DisabledByGroupPolicy" "REG_DWORD" "1" "DisabledByGroupPolicy"
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" "Disabled" "REG_DWORD" "1" "Disable Error Reporting"
 
-call :LOG Disable Powershell telemetry
+call :LOG Turning off saving of Recall snapshots
+::DisableAIDataAnalysis is the "Turn off saving snapshots for use with Recall" policy
+::(Windows 11 24H2 build 26100.3915 and later). It is not related to PowerShell telemetry.
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis" "REG_DWORD" "1" "DisableAIDataAnalysis"
 
 call :LOG Disabling Windows Updated DeliveryOptimization network bandwidth use through Registry
