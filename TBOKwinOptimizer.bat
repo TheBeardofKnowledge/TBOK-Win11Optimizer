@@ -253,6 +253,9 @@ goto :Switches
 :: During analysis-progress mode, normal messages are logged but not echoed.
 :: During profile-summary mode, routine messages are suppressed while
 :: ERROR and WARNING messages remain visible.
+:: Security: the message is captured with delayed expansion disabled and printed with
+:: delayed expansion enabled. Delayed expansion inserts the text after cmd has parsed
+:: the line, so & | < > ^ inside a message are printed, never executed.
 setlocal DisableDelayedExpansion
 
 set "LogMessage=%*"
@@ -266,14 +269,10 @@ if defined TBOK_PROFILE_SUMMARY_MODE (
         )
     )
 )
-if defined TBOK_ANALYSIS_PROGRESS_ACTIVE (
-    >>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
-    endlocal
-    exit /b 0
-)
-echo(%LogMessage%
->>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
-
+setlocal EnableDelayedExpansion
+if not defined TBOK_ANALYSIS_PROGRESS_ACTIVE echo(!LogMessage!
+>>"!LOGFILE!" echo([!DATE! !TIME!] !LogMessage!
+endlocal
 endlocal
 exit /b 0
 
@@ -2108,10 +2107,12 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 
 set "TBOK_MEMORY_RC=%ERRORLEVEL%"
 
+:: Security: the snapshot lists process names, which any local user controls. Copy the
+:: file as data rather than passing each line through CALL :LOG, so a process whose name
+:: contains & cannot inject a command into this elevated session.
 if exist "%TBOK_MEMORY_FILE%" (
-    for /f "usebackq delims=" %%M in ("%TBOK_MEMORY_FILE%") do (
-        call :LOG %%M
-    )
+    if not defined TBOK_ANALYSIS_PROGRESS_ACTIVE type "%TBOK_MEMORY_FILE%"
+    >>"%LOGFILE%" type "%TBOK_MEMORY_FILE%"
     del /q "%TBOK_MEMORY_FILE%" >nul 2>&1
 )
 if not "%TBOK_MEMORY_RC%"=="0" (
