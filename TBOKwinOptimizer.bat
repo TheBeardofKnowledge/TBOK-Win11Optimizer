@@ -4848,7 +4848,7 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	REM Word STARTUP add-ins. They are intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
+	REM OneNote's cache holds edits that have not synced yet; it is intentionally not cleaned.
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Windows\WebCache\*.*" >nul 2>&1
 	)
 
