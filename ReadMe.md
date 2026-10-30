@@ -17,7 +17,7 @@ Yes, this also improves LTSC versions, including IoT... the parts that don't app
 
 You see, most debloat tools* only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.  While I love tools like the CTT WinUtil, Ralphire's Win11Debloat, and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, and for each user: that's extremely inefficient and time consuming... and you're definitely NOT going to IRM a github script in an Enterprise environment, right?! RIGHT!? 
 
-This is a problem for Custom PC builders & IT people because they tune a pc, but when a new person signs in with their own account on that computer; all the bad settings and bloat come back. 
+This is a problem for Custom PC builders & IT people because they tune and configure a pc after install, but when a new person signs in with their own account on that PC; all the bad settings and bloat come back. 
 
 So let's fix that and make it soo easy and safe that it removes any hurdles.**
 
