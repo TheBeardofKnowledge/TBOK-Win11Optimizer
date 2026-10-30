@@ -15,8 +15,9 @@ If you haven't noticed, Windows 11 is not fully optimized, in fact, it's unneces
 It's not your computer, it's Microsoft's bad decisions on failure to streamline their OS for modern hardware. But there's hope... the Dev's left us a way to change it.
 Yes, this also improves LTSC versions, including IoT... the parts that don't apply just gracefully fail or get ignored, but ~80% is still aplicable.
 
-You see, most debloat tools* only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.  While I love  tools like the CTT WinUtil, Ralphire's Win11Debloat, and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, and for each user: that's extremely inefficient and time consuming... and you're definitely NOT going to IRM a github script in an Enterprise environment, right?! RIGHT!? 
-This is a problem for Custom PC builders & IT people because when a new person signs in with their account on that computer, all the bad settings and bloat come back.
+You see, most debloat tools* only modify the existing user account that you ran it with... but Windows made a lot of settings that are considered "bloat" a per-user setting.  While I love tools like the CTT WinUtil, Ralphire's Win11Debloat, and Belim's FlyByOOBE or CrapFixer, when you work with hundreds of computers like I do, you're not doing to manually configure these options on each pc, and for each user: that's extremely inefficient and time consuming... and you're definitely NOT going to IRM a github script in an Enterprise environment, right?! RIGHT!? 
+
+This is a problem for Custom PC builders & IT people because they tune a pc, but when a new person signs in with their own account on that computer; all the bad settings and bloat come back. 
 
 So let's fix that and make it soo easy and safe that it removes any hurdles.**
 
