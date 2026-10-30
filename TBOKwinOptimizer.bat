@@ -73,8 +73,8 @@ set "CLR_WHITE=%ESC%[97m"
 
 ::Script release version and release date
 :ScriptVersion
-set "VERSION=1.7.1"
-set "VERDATE=10-28-2026"
+set "VERSION=1.7.2"
+set "VERDATE=10-30-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
@@ -131,7 +131,7 @@ exit /b 0
 
 :GotPrivileges
 ECHO Script elevated successfully
-
+ECHO Checking PowerShell Requirements
 call :CheckPowerShellRequirements
 
 if errorlevel 1 (
@@ -142,6 +142,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+ECHO.
 ECHO Analyzing System to create optimized plan, please wait...
 call :ShowAnalysisProgress 0 "Starting system analysis"
 
@@ -1060,39 +1061,41 @@ if "%TBOK_TASK_PLAN_SIZE%"=="0" (
 call :LOG Applying scheduled-task changes in one PowerShell session...
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$failed = $false;" ^
+    "$failureCount = 0;$requestCount = 0;$disabledCount = 0;$alreadyDisabledCount = 0;$notInstalledCount = 0;$duplicateCount = 0;$seen = @{};" ^
     "$lines = @(Get-Content -LiteralPath $env:TBOK_TASK_PLAN -ErrorAction Stop);" ^
     "$installedTasks = @(Get-ScheduledTask -ErrorAction Stop);" ^
     "foreach ($line in $lines) {" ^
     "    if ($null -eq $line -or $line.Trim().Length -eq 0) { continue };" ^
-    "    $parts = $line.Split('|', 2);" ^
+    "    $requestCount++;$parts = $line.Split('|', 2);" ^
     "    if ($parts.Count -ne 2) {" ^
     "        Write-Output ('ERROR: Invalid task plan entry: ' + $line);" ^
-    "        $failed = $true;" ^
+    "        $failureCount++;" ^
     "        continue;" ^
     "    };" ^
     "    $path = $parts[0].Trim();" ^
     "    $name = $parts[1].Trim();" ^
+    "    $key=($path+$name).ToLowerInvariant();if($seen.ContainsKey($key)){Write-Output ('DUPLICATE: '+$path+$name);$duplicateCount++;continue};$seen[$key]=$true;" ^
     "    $tasks = @($installedTasks | Where-Object { $_.TaskPath -eq $path -and $_.TaskName -eq $name });" ^
     "    if ($tasks.Count -eq 0) {" ^
-    "        Write-Output ('SKIPPED: Task not found: ' + $path + $name);" ^
+    "        Write-Output ('NOT INSTALLED: ' + $path + $name);$notInstalledCount++;" ^
     "        continue;" ^
     "    };" ^
     "    foreach ($task in $tasks) {" ^
     "        try {" ^
     "            if ($task.State -eq 'Disabled') {" ^
-    "                Write-Output ('SKIPPED: Task already disabled: ' + $task.TaskPath + $task.TaskName);" ^
+    "                Write-Output ('ALREADY DISABLED: ' + $task.TaskPath + $task.TaskName);$alreadyDisabledCount++;" ^
     "            } else {" ^
     "                $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null;" ^
-    "                Write-Output ('SUCCESS: Disabled task: ' + $task.TaskPath + $task.TaskName);" ^
+    "                Write-Output ('DISABLED: ' + $task.TaskPath + $task.TaskName);$disabledCount++;" ^
     "            };" ^
     "        } catch {" ^
     "            Write-Output ('ERROR: Failed to disable ' + $task.TaskPath + $task.TaskName + ': ' + $_.Exception.Message);" ^
-    "            $failed = $true;" ^
+    "            $failureCount++;" ^
     "        };" ^
     "    };" ^
     "};" ^
-    "if ($failed) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
+    "Write-Output '';Write-Output 'Scheduled-task plan summary:';Write-Output ('  Requests: '+$requestCount);Write-Output ('  Disabled: '+$disabledCount);Write-Output ('  Already disabled: '+$alreadyDisabledCount);Write-Output ('  Not installed: '+$notInstalledCount);Write-Output ('  Duplicate requests: '+$duplicateCount);Write-Output ('  Failed: '+$failureCount);" ^
+    "if ($failureCount -gt 0) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
 
 set "TaskPlanRC=%ERRORLEVEL%"
 
@@ -1100,6 +1103,7 @@ if exist "%TBOK_TASK_PLAN%" (
     del /q "%TBOK_TASK_PLAN%" >nul 2>&1
 )
 endlocal & exit /b %TaskPlanRC%
+
 
 
 :RemoveAppxPattern
@@ -1838,23 +1842,6 @@ exit /b 0
 ::::::::::::::::::::::::::::: SECTION END Helpers for Control Sets mapping::::::::::::::::::::::::::::
 
 
-:GetInstalledMemory
-:: helper to get the currently installed physical memory values to be used
-set "TBOK_MEMORY_KB="
-set "TBOK_MEMORY_MB="
-set "TBOK_MEMORY_GB="
-
-for /f "usebackq tokens=1-3 delims=;" %%A in (`powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$n=(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop | Measure-Object -Property Capacity -Sum).Sum;if($n){'{0:F0};{1:F0};{2:F0}' -f ($n/1KB),($n/1MB),($n/1GB)}" 2^>nul`) do (
-    set "TBOK_MEMORY_KB=%%A"
-    set "TBOK_MEMORY_MB=%%B"
-    set "TBOK_MEMORY_GB=%%C"
-)
-if not defined TBOK_MEMORY_KB exit /b 1
-if not defined TBOK_MEMORY_MB exit /b 1
-if not defined TBOK_MEMORY_GB exit /b 1
-exit /b 0
-
-
 :ResolveSystemPolicy
 :: Resolve all hardware-dependent targets only after the hardware profile
 :: has completed successfully.
@@ -1867,6 +1854,7 @@ if not defined TBOK_SYSTEM_PROFILE_READY (
 set "TBOK_SYSMAIN_MODE=unchanged"
 set "TBOK_MMAGENT_POLICY=Unchanged"
 set "TBOK_PREFETCH_POLICY=Unchanged"
+set "TBOK_PRELAUNCH_POLICY=Unchanged"
 set "TBOK_LOW_MEMORY_POLICY=No"
 set "TBOK_HIBERNATION_POLICY=Unchanged"
 set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -1879,7 +1867,6 @@ if not defined TBOK_MEMORY_MB (
     call :LOG Hardware-dependent policy targets could not be resolved.
     exit /b 1
 )
-
 if not defined TBOK_MEMORY_GB set "TBOK_MEMORY_GB=Unknown"
 if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
 if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
@@ -1893,31 +1880,83 @@ if /I "!CHASSISTYPE!"=="Laptop" (
     set "TBOK_POWERPLAN_POLICY=Ultimate Performance"
 )
 
-:: Resolve SysMain, MMAgent, and Windows Prefetch policy.
+:: Resolve the combined RAM and system-drive memory policy.
 ::
-:: RAM <= 12 GB:
-::   Keep SysMain Automatic so MMAgent remains functional.
-::   Enable the low-memory MMAgent policy.
-::   Use boot prefetch only to reduce application-launch memory pressure.
+:: RAM <= 12 GB + SSD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 0
+::   EnableSuperfetch 0
 ::
-:: RAM > 12 GB:
-::   SSD     = SysMain Automatic, boot prefetch only.
-::   HDD     = SysMain Automatic, boot + application prefetch.
-::   Unknown = SysMain and Prefetch left unchanged.
+:: RAM <= 12 GB + HDD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 2
+::   EnableSuperfetch 0
+::
+:: RAM <= 12 GB + UNKNOWN:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher Unchanged
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + SSD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 2
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + HDD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 3
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + UNKNOWN:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher Unchanged
+::   EnableSuperfetch Unchanged
+
+set "TBOK_SYSMAIN_MODE=auto"
 
 if !TBOK_MEMORY_MB! LEQ 12288 (
     set "TBOK_LOW_MEMORY_POLICY=Yes"
-    set "TBOK_MMAGENT_POLICY=Enabled"
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=2"
-) else if /I "!TBOK_DRIVETYPE!"=="SSD" (
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=2"
-) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=3"
-)
 
+    if /I "!TBOK_DRIVETYPE!"=="SSD" (
+        set "TBOK_MMAGENT_POLICY=LowMemorySSD"
+        set "TBOK_PREFETCH_POLICY=0"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
+        set "TBOK_MMAGENT_POLICY=LowMemoryHDD"
+        set "TBOK_PREFETCH_POLICY=2"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else (
+        set "TBOK_MMAGENT_POLICY=LowMemoryUnknown"
+        set "TBOK_PREFETCH_POLICY=Unchanged"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    )
+) else (
+    if /I "!TBOK_DRIVETYPE!"=="SSD" (
+        set "TBOK_MMAGENT_POLICY=HighMemorySSD"
+        set "TBOK_PREFETCH_POLICY=2"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
+        set "TBOK_MMAGENT_POLICY=HighMemoryHDD"
+        set "TBOK_PREFETCH_POLICY=3"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else (
+        set "TBOK_MMAGENT_POLICY=HighMemoryUnknown"
+        set "TBOK_PREFETCH_POLICY=Unchanged"
+        set "TBOK_PRELAUNCH_POLICY=Unchanged"
+    )
+)
 
 :: Page-file policy.
 if !TBOK_MEMORY_MB! GEQ 32768 (
@@ -1944,35 +1983,42 @@ call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
 call :LOG SysMain target: !TBOK_SYSMAIN_MODE!
 call :LOG MMAgent target: !TBOK_MMAGENT_POLICY!
 call :LOG Prefetch target: !TBOK_PREFETCH_POLICY!
+call :LOG Application PreLaunch target: !TBOK_PRELAUNCH_POLICY!
 call :LOG Hibernation target: !TBOK_HIBERNATION_POLICY!
 call :LOG Page-file target: !TBOK_PAGEFILE_POLICY!
 call :LOG Gaming power-plan target: !TBOK_POWERPLAN_POLICY!
+
 set "TBOK_POLICY_ALREADY_RESOLVED=1"
 call :ShowAnalysisProgress 100 "Optimization policy ready"
 exit /b 0
 
-:: Configure MMAgent features only for the low-memory profile.
-:ConfigureMemoryFeatures
-if /I not "!TBOK_MMAGENT_POLICY!"=="Enabled" (
-    call :LOG MMAgent settings were left unchanged by the resolved system policy.
-    exit /b 0
-)
 
-call :LOG Configuring SysMain and MMAgent for the low-memory profile...
+:: Configure SysMain and MMAgent according to the resolved system policy.
+:: SysMain must be Automatic and Running before MMAgent is configured.
+:: Application launch Prefetch and PreLaunch policies are applied separately
+:: through the PrefetchParameters registry values.
+:ConfigureMemoryFeatures
+call :LOG Configuring SysMain and MMAgent for the resolved memory and storage profile...
+call :LOG Memory profile: !TBOK_MMAGENT_POLICY!
+call :LOG SysMain target: Automatic
+call :LOG MemoryCompression target: Enabled
+call :LOG PageCombining target: Enabled
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$criticalFailure = $false;" ^
-    "$optionalFailure = $false;" ^
+    "$failure = $false;" ^
     "try {" ^
     "    Set-Service -Name SysMain -StartupType Automatic -ErrorAction Stop;" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    if ($sysMain.Status -ne 'Running') {" ^
+    "        Write-Output 'SysMain is not running. Starting SysMain before MMAgent configuration...';" ^
     "        Start-Service -Name SysMain -ErrorAction Stop;" ^
     "        $sysMain.WaitForStatus('Running', (New-TimeSpan -Seconds 15));" ^
     "    };" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    Write-Output ('SysMain startup target=Automatic; Status=' + $sysMain.Status);" ^
-    "    if ($sysMain.Status -ne 'Running') { throw 'SysMain did not reach the Running state.' };" ^
+    "    if ($sysMain.Status -ne 'Running') {" ^
+    "        throw 'SysMain did not reach the Running state.';" ^
+    "    };" ^
     "} catch {" ^
     "    Write-Output ('ERROR: SysMain could not be prepared for MMAgent: ' + $_.Exception.Message);" ^
     "    exit 1;" ^
@@ -1982,62 +2028,50 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "    Write-Output 'APPLIED: Memory compression enable was requested.';" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Memory compression could not be enabled: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
+    "    $failure = $true;" ^
     "};" ^
     "try {" ^
     "    Enable-MMAgent -PageCombining -ErrorAction Stop;" ^
     "    Write-Output 'APPLIED: Page combining enable was requested.';" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Page combining could not be enabled: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
-    "};" ^
-    "try {" ^
-    "    Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
-    "    Write-Output 'APPLIED: Application prelaunch disable was requested.';" ^
-    "} catch {" ^
-    "    Write-Output ('NOTICE: Application prelaunch was left unchanged: ' + $_.Exception.Message);" ^
-    "    $optionalFailure = $true;" ^
+    "    $failure = $true;" ^
     "};" ^
     "try {" ^
     "    $final = Get-MMAgent -ErrorAction Stop;" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    Write-Output ('Final SysMainStatus=' + $sysMain.Status);" ^
     "    Write-Output ('Final MemoryCompression=' + $final.MemoryCompression);" ^
-    "    Write-Output ('Final ApplicationLaunchPrefetching=' + $final.ApplicationLaunchPrefetching);" ^
-    "    Write-Output ('Final ApplicationPreLaunch=' + $final.ApplicationPreLaunch);" ^
-    "    Write-Output ('Final OperationAPI=' + $final.OperationAPI);" ^
     "    Write-Output ('Final PageCombining=' + $final.PageCombining);" ^
     "    if ($sysMain.Status -ne 'Running') {" ^
     "        Write-Output 'ERROR: SysMain is not running after MMAgent configuration.';" ^
-    "        $criticalFailure = $true;" ^
+    "        $failure = $true;" ^
     "    };" ^
     "    if (-not $final.MemoryCompression) {" ^
-    "        Write-Output 'ERROR: Memory compression is not enabled in the final MMAgent state.';" ^
-    "        $criticalFailure = $true;" ^
+    "        Write-Output 'ERROR: MemoryCompression is not enabled.';" ^
+    "        $failure = $true;" ^
     "    };" ^
     "    if (-not $final.PageCombining) {" ^
-    "        Write-Output 'ERROR: Page combining is not enabled in the final MMAgent state.';" ^
-    "        $criticalFailure = $true;" ^
+    "        Write-Output 'ERROR: PageCombining is not enabled.';" ^
+    "        $failure = $true;" ^
     "    };" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Final SysMain or MMAgent state could not be verified: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
-    "};" ^
-    "if ($optionalFailure) {" ^
-    "    Write-Output 'NOTICE: One optional MMAgent setting was unsupported and was left unchanged.';" ^
+    "    $failure = $true;" ^
     "};" ^
     "Write-Output 'NOTICE: A restart is required to validate the persistent SysMain and MMAgent state.';" ^
-    "if ($criticalFailure) { exit 1 } else { exit 0 }" ^
+    "if ($failure) { exit 1 } else { exit 0 }" ^
     >>"%LOGFILE%" 2>&1
 
 set "MemoryFeaturesRC=!ERRORLEVEL!"
 
 if not "!MemoryFeaturesRC!"=="0" (
-    call :LOG WARNING: Low-memory SysMain or MMAgent configuration failed.
+    call :LOG WARNING: SysMain or MMAgent configuration completed with one or more failures.
     exit /b 1
 )
 
-call :LOG Low-memory SysMain and MMAgent configuration completed.
+call :LOG SysMain is Automatic and Running.
+call :LOG Memory Compression and Page Combining configuration completed successfully.
 exit /b 0
 
 :: Capture a Windows memory snapshot and write it to the console and logfile.
@@ -2151,138 +2185,103 @@ if not "%TBOK_MEMORY_RC%"=="0" (
 endlocal
 exit /b 0
 
-:GetChassisType
-:: Helper for Chassis type detection to avoid enabling desktop tweaks on a device with a battery - Returns Laptop, Desktop, or Unknown in CHASSISTYPE for later logic use
-set "CHASSISTYPE=Unknown"
-for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "$ct=@((Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue).ChassisTypes); if($null -ne ($ct -as [array])){if($ct -match '^(8|9|10|11|12|14|18|21|23|30|31|32)$'){'Laptop'}elseif($ct -match '^(3|4|5|6|7|13|15|16|24|35|36)$'){'Desktop'}else{'Unknown'}}else{'Unknown'}" 2^>nul') do set "CHASSISTYPE=%%G"
-exit /b
-
 :GetSystemProfile
-:: Helper to build variables required hardware profile for specific scenario optimizations.
-:: Cache the profile only after all required detection completed successfully.
+:: Build memory, chassis, and drive-media data in one PowerShell session.
+:: Memory discovery is required. Chassis and drive detection degrade safely to Unknown.
 if defined TBOK_SYSTEM_PROFILE_READY exit /b 0
-
-set "SystemProfileFailed=0"
 set "TBOK_SYSTEM_PROFILE_READY="
-call :ShowAnalysisProgress 5 "Initializing hardware profile"
-call :LOG Building hardware profile...
-call :GetInstalledMemory
-set "SystemProfileMemoryRC=!ERRORLEVEL!"
-if "!SystemProfileMemoryRC!"=="0" (
-    call :ShowAnalysisProgress 20 "Installed memory detected"
-) else (
-    call :ShowAnalysisProgress 20 "Memory detection incomplete"
-)
-if not "!SystemProfileMemoryRC!"=="0" (
-    set "SystemProfileFailed=1"
-    call :LOG WARNING: Installed memory could not be determined.
-)
-
-call :GetChassisType
-call :ShowAnalysisProgress 40 "Chassis profile detected"
-call :LOG Chassis profile: !CHASSISTYPE!
-::Detect whether the Windows system drive is an HDD or SSD and physical media type
+set "TBOK_MEMORY_KB="
+set "TBOK_MEMORY_MB="
+set "TBOK_MEMORY_GB="
+set "CHASSISTYPE=Unknown"
 set "TBOK_DRIVETYPE=UNKNOWN"
-set "DriveDetectRC="
-set "DriveDetectFile=%TEMP%\TBOK-DriveDetect-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
+set "SystemProfileFile=%TEMP%\TBOK-SystemProfile-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
+call :ShowAnalysisProgress 5 "Initializing hardware profile"
+call :LOG Building consolidated hardware profile...
 
-call :LOG Detecting Windows system drive media type...
-call :ShowAnalysisProgress 50 "Analyzing system drive"
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "$ErrorActionPreference = 'Stop';" ^
     "try {" ^
-    "    $driveLetter = $env:SystemDrive.TrimEnd(':');" ^
-    "    $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop;" ^
-    "    $disk = $partition | Get-Disk -ErrorAction Stop;" ^
-    "    $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue);" ^
-    "    $matchingPhysical = @($physicalDisks | Where-Object { [string]$_.DeviceId -eq [string]$disk.Number });" ^
-    "    if ($matchingPhysical.Count -eq 0 -and $physicalDisks.Count -eq 1) {" ^
-    "        $matchingPhysical = $physicalDisks;" ^
-    "    };" ^
-    "    $isRotational = $false;" ^
-    "    $isSolidState = $false;" ^
-    "    if ([string]$disk.MediaType -eq 'HDD') {" ^
-    "        $isRotational = $true;" ^
-    "    } elseif ([string]$disk.MediaType -match 'SSD|SCM') {" ^
-    "        $isSolidState = $true;" ^
-    "    };" ^
-    "    foreach ($physicalDisk in $matchingPhysical) {" ^
-    "        if ([string]$physicalDisk.MediaType -eq 'HDD') {" ^
-    "            $isRotational = $true;" ^
-    "        } elseif ([string]$physicalDisk.MediaType -match 'SSD|SCM') {" ^
-    "            $isSolidState = $true;" ^
-    "        };" ^
-    "        if ($null -ne $physicalDisk.SpindleSpeed) {" ^
-    "            if ([uint64]$physicalDisk.SpindleSpeed -gt 0) {" ^
-    "                $isRotational = $true;" ^
-    "            } elseif ([uint64]$physicalDisk.SpindleSpeed -eq 0) {" ^
-    "                $isSolidState = $true;" ^
+    "    $memoryBytes = (Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop | Measure-Object -Property Capacity -Sum).Sum;" ^
+    "    if (-not $memoryBytes -or $memoryBytes -le 0) { throw 'Installed physical memory could not be determined.' };" ^
+    "    $chassis = 'Unknown';" ^
+    "    try {" ^
+    "        $chassisTypes = @((Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction Stop).ChassisTypes);" ^
+    "        if ($chassisTypes -match '^(8|9|10|11|12|14|18|21|23|30|31|32)$') { $chassis = 'Laptop' }" ^
+    "        elseif ($chassisTypes -match '^(3|4|5|6|7|13|15|16|24|35|36)$') { $chassis = 'Desktop' };" ^
+    "    } catch { Write-Output ('WARNING=Chassis detection: ' + $_.Exception.Message) };" ^
+    "    $driveType = 'UNKNOWN';" ^
+    "    try {" ^
+    "        $driveLetter = $env:SystemDrive.TrimEnd(':');" ^
+    "        $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop;" ^
+    "        $disk = $partition | Get-Disk -ErrorAction Stop;" ^
+    "        $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue);" ^
+    "        $matchingPhysical = @($physicalDisks | Where-Object { [string]$_.DeviceId -eq [string]$disk.Number });" ^
+    "        if ($matchingPhysical.Count -eq 0 -and $physicalDisks.Count -eq 1) { $matchingPhysical = $physicalDisks };" ^
+    "        $isRotational = ([string]$disk.MediaType -eq 'HDD');" ^
+    "        $isSolidState = ([string]$disk.MediaType -match 'SSD|SCM');" ^
+    "        foreach ($physicalDisk in $matchingPhysical) {" ^
+    "            if ([string]$physicalDisk.MediaType -eq 'HDD') { $isRotational = $true };" ^
+    "            if ([string]$physicalDisk.MediaType -match 'SSD|SCM') { $isSolidState = $true };" ^
+    "            if ($null -ne $physicalDisk.SpindleSpeed) {" ^
+    "                if ([uint64]$physicalDisk.SpindleSpeed -gt 0) { $isRotational = $true }" ^
+    "                elseif ([uint64]$physicalDisk.SpindleSpeed -eq 0) { $isSolidState = $true };" ^
     "            };" ^
     "        };" ^
-    "    };" ^
-    "    Write-Output ('DETAIL: DiskNumber=' + $disk.Number + '; BusType=' + $disk.BusType + '; MediaType=' + $disk.MediaType + '; FriendlyName=' + $disk.FriendlyName);" ^
-    "    foreach ($physicalDisk in $matchingPhysical) {" ^
-    "        Write-Output ('DETAIL: PhysicalDisk=' + $physicalDisk.FriendlyName + '; MediaType=' + $physicalDisk.MediaType + '; SpindleSpeed=' + $physicalDisk.SpindleSpeed);" ^
-    "    };" ^
-    "    if ($isRotational) {" ^
-    "        Write-Output 'RESULT=HDD';" ^
-    "    } elseif ($isSolidState) {" ^
-    "        Write-Output 'RESULT=SSD';" ^
-    "    } elseif ([string]$disk.BusType -eq 'NVMe') {" ^
-    "        Write-Output 'RESULT=SSD';" ^
-    "    } elseif ([string]$disk.BusType -eq 'RAID') {" ^
-    "        Write-Output 'RESULT=UNKNOWN';" ^
-    "    } else {" ^
-    "        Write-Output 'RESULT=UNKNOWN';" ^
-    "    };" ^
+    "        if ($isRotational) { $driveType = 'HDD' }" ^
+    "        elseif ($isSolidState -or [string]$disk.BusType -eq 'NVMe') { $driveType = 'SSD' };" ^
+    "        Write-Output ('DETAIL=DiskNumber=' + $disk.Number + '; BusType=' + $disk.BusType + '; MediaType=' + $disk.MediaType + '; FriendlyName=' + $disk.FriendlyName);" ^
+    "    } catch { Write-Output ('WARNING=Drive detection: ' + $_.Exception.Message) };" ^
+    "    Write-Output ('MEMORY_KB={0:F0}' -f ($memoryBytes / 1KB));" ^
+    "    Write-Output ('MEMORY_MB={0:F0}' -f ($memoryBytes / 1MB));" ^
+    "    Write-Output ('MEMORY_GB={0:F0}' -f ($memoryBytes / 1GB));" ^
+    "    Write-Output ('CHASSIS=' + $chassis);" ^
+    "    Write-Output ('DRIVETYPE=' + $driveType);" ^
     "    exit 0;" ^
     "} catch {" ^
     "    Write-Output ('ERROR=' + $_.Exception.Message);" ^
     "    exit 1;" ^
-    "}" >"%DriveDetectFile%" 2>&1
-set "DriveDetectRC=!ERRORLEVEL!"
-if exist "%DriveDetectFile%" (
-    type "%DriveDetectFile%" >>"%LOGFILE%"
-)
-if not "!DriveDetectRC!"=="0" (
-    set "SystemProfileFailed=1"
-    call :LOG WARNING: Drive detection PowerShell returned exit code !DriveDetectRC!.
+    "}" >"%SystemProfileFile%" 2>&1
+set "SystemProfileRC=!ERRORLEVEL!"
 
-	if defined DriveDetectFile (
-        if exist "!DriveDetectFile!" (
-            for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"ERROR=" "!DriveDetectFile!" 2^>nul') do (
-                call :LOG Drive detection error: %%B
-            )
-        )
-    )
+if exist "!SystemProfileFile!" type "!SystemProfileFile!" >>"%LOGFILE%"
+if not "!SystemProfileRC!"=="0" goto :GetSystemProfileFailed
 
-    goto :GetSystemProfileCleanup
+for /f "usebackq tokens=1,* delims==" %%A in ("!SystemProfileFile!") do (
+    if /I "%%A"=="MEMORY_KB" set "TBOK_MEMORY_KB=%%B"
+    if /I "%%A"=="MEMORY_MB" set "TBOK_MEMORY_MB=%%B"
+    if /I "%%A"=="MEMORY_GB" set "TBOK_MEMORY_GB=%%B"
+    if /I "%%A"=="CHASSIS" set "CHASSISTYPE=%%B"
+    if /I "%%A"=="DRIVETYPE" set "TBOK_DRIVETYPE=%%B"
 )
-for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"RESULT=" "%DriveDetectFile%" 2^>nul') do (
-    set "TBOK_DRIVETYPE=%%B"
-)
-if /i not "!TBOK_DRIVETYPE!"=="HDD" if /i not "!TBOK_DRIVETYPE!"=="SSD" (
-    set "TBOK_DRIVETYPE=UNKNOWN"
-)
+
+if not defined TBOK_MEMORY_KB goto :GetSystemProfileFailed
+if not defined TBOK_MEMORY_MB goto :GetSystemProfileFailed
+if not defined TBOK_MEMORY_GB goto :GetSystemProfileFailed
+if /I not "!TBOK_DRIVETYPE!"=="HDD" if /I not "!TBOK_DRIVETYPE!"=="SSD" set "TBOK_DRIVETYPE=UNKNOWN"
+
+if exist "!SystemProfileFile!" del /q "!SystemProfileFile!" >nul 2>&1
+set "SystemProfileFile="
+call :ShowAnalysisProgress 35 "Installed memory detected"
+call :ShowAnalysisProgress 55 "Chassis profile detected"
 call :ShowAnalysisProgress 75 "System drive profile detected"
-
-:GetSystemProfileCleanup
-if defined DriveDetectFile (
-    if exist "%DriveDetectFile%" (
-        del /q "%DriveDetectFile%" >nul 2>&1
-    )
-)
+call :LOG Installed physical memory: !TBOK_MEMORY_MB! MB
+call :LOG Chassis profile: !CHASSISTYPE!
 call :LOG Storage profile: !TBOK_DRIVETYPE!
-if "!SystemProfileFailed!"=="1" (
-    set "TBOK_SYSTEM_PROFILE_READY="
-    set "SystemProfileFailed="
-    exit /b 1
-)
-
-set "TBOK_SYSTEM_PROFILE_READY=1"
-set "SystemProfileFailed="
 call :ShowAnalysisProgress 85 "Hardware profile complete"
+set "TBOK_SYSTEM_PROFILE_READY=1"
 exit /b 0
+
+:GetSystemProfileFailed
+if exist "!SystemProfileFile!" (
+    for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"ERROR=" "!SystemProfileFile!" 2^>nul') do (
+        call :LOG Hardware profile error: %%B
+    )
+    del /q "!SystemProfileFile!" >nul 2>&1
+)
+set "SystemProfileFile="
+call :LOG ERROR: The consolidated hardware profile could not be completed.
+exit /b 1
 
 :InitializeTemporaryPlans
 set "TBOK_SERVICE_PLAN=%TEMP%\TBOK-ServicePlan-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
@@ -3024,6 +3023,10 @@ if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
 if not defined TBOK_SYSMAIN_MODE set "TBOK_SYSMAIN_MODE=unchanged"
 if not defined TBOK_MMAGENT_POLICY set "TBOK_MMAGENT_POLICY=Unchanged"
 if not defined TBOK_PREFETCH_POLICY set "TBOK_PREFETCH_POLICY=Unchanged"
+set "TBOK_PREFETCH_DISPLAY=Unchanged"
+if "!TBOK_PREFETCH_POLICY!"=="0" set "TBOK_PREFETCH_DISPLAY=Disabled"
+if "!TBOK_PREFETCH_POLICY!"=="2" set "TBOK_PREFETCH_DISPLAY=Boot Only"
+if "!TBOK_PREFETCH_POLICY!"=="3" set "TBOK_PREFETCH_DISPLAY=Application + Boot"
 if not defined TBOK_LOW_MEMORY_POLICY set "TBOK_LOW_MEMORY_POLICY=Unknown"
 if not defined TBOK_HIBERNATION_POLICY set "TBOK_HIBERNATION_POLICY=Unchanged"
 if not defined TBOK_PAGEFILE_POLICY set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -3032,6 +3035,7 @@ exit /b 0
 
 :MENU
 call :RefreshMenuProfile
+cls
 TITLE TBOK Windows Performance Optimizer Version %version% %verdate%
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
 echo %CLR_WARN%                   Script now supports cmd line options for non-interactive sessions
@@ -3058,9 +3062,9 @@ echo %CLR_OPTION% *  2. Run BeardSweeper Disk Cleanup routine            *      
 echo %CLR_OPTION% *  3. Apply Gaming Optimizations                       *        VM config target mode: !TBOK_PAGEFILE_POLICY!
 echo %CLR_OPTION% *  4. Update apps using WinGet                         *        Hibernation target mode: !TBOK_HIBERNATION_POLICY!
 echo %CLR_OPTION% *  5. EXIT                                             *        Gaming plan: !TBOK_POWERPLAN_POLICY!
-echo %CLR_TITLE% *                                                      *
-echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *          Log Reuse Enabled
-echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *
+echo %CLR_TITLE% *                                                      *        Prefetcher plan: !TBOK_PREFETCH_DISPLAY!
+echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *
+echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *                 Log Reuse Enabled
 echo %CLR_TITLE% ********************************************************    ****************************************
 echo %CLR_RESET%
 choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 30 seconds): " /t 30 /d 1 2>>"%LOGFILE%"
@@ -3210,6 +3214,8 @@ if /I not "!TBOK_BITLOCKER_STATUS!"=="Off" (
 ) else (
     call :LOG Restoring the much beloved F8 Startup menu availability - WHY DID THEY REMOVE THAT
 ::This is optional to enable but a good default to Restore
+::Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
+::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu - be aware
     bcdedit.exe /set {default} bootmenupolicy legacy >>"%LOGFILE%" 2>&1
     if errorlevel 1 (
         call :LOG ERROR: Failed to enable the legacy F8 boot menu.
@@ -3436,19 +3442,17 @@ call :SetServiceStartup AppVClient disabled
 call :SetServiceStartup NetTcpPortSharing disabled
 call :SetServiceStartup DialogBlockingService disabled
 if "!TBOK_SKU_ENTERPRISE!"=="1" (
-    call :LOG NOTICE: Enterprise/Education SKU !TBOK_SKU! detected. DiagTrack is left enabled for security-management compatibility.
+    call :LOG NOTICE: Enterprise/Education SKU !TBOK_SKU! detected. DiagTrack is left unchanged for security-management compatibility.
 ) else (
     call :SetServiceStartup DiagTrack disabled
 )
 call :SetServiceStartup UevAgentService disabled
 call :LOG NOTICE: ssh-agent startup is left unchanged to preserve SSH key and developer workflows.
 
-call :LOG Applying the resolved SysMain and MMAgent service policy
-:: TBOK SysMain and Prefetch policy:
-:: Systems with 12 GB or less RAM keep SysMain Automatic and use boot-only Prefetch.
-:: Higher-memory SSD systems keep SysMain Automatic and use boot-only Prefetch.
-:: Higher-memory HDD systems keep SysMain Automatic and use boot + application Prefetch.
-:: Higher-memory systems with unknown storage leave SysMain and Prefetch unchanged.
+call :LOG Applying the resolved SysMain service policy
+:: All resolved RAM and storage profiles require SysMain Automatic.
+:: ConfigureMemoryFeatures has already ensured SysMain is Running before
+:: applying the MMAgent Memory Compression and Page Combining settings.
 call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
 call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
@@ -3457,15 +3461,10 @@ call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
 if /I "!TBOK_SYSMAIN_MODE!"=="auto" (
     call :LOG Keeping SysMain Automatic according to the resolved system policy.
     call :SetServiceStartup SysMain auto
-) else if /I "!TBOK_SYSMAIN_MODE!"=="disabled" (
-    call :LOG Disabling SysMain on this higher-memory SSD system.
-    call :SetServiceStartup SysMain disabled
-) else if /I "!TBOK_SYSMAIN_MODE!"=="demand" (
-    call :LOG Setting SysMain to start on demand on this higher-memory HDD system.
-    call :SetServiceStartup SysMain demand
 ) else (
-    call :LOG SysMain and MMAgent were left unchanged because no reliable target mode was resolved.
+    call :LOG WARNING: No valid SysMain target was resolved. SysMain startup mode was left unchanged.
 )
+
 ECHO.
 call :LOG Done with services to disable
 ECHO.
@@ -3701,6 +3700,7 @@ call :SetServiceStartup tiledatamodelsvc auto
 call :SetServiceStartup TrkWks auto
 call :SetServiceStartup uhssvc auto
 call :SetServiceStartup UserManager auto
+call :SetServiceStartup W32Time auto
 call :SetServiceStartup Wcmsvc auto
 call :SetServiceStartup Winmgmt auto
 call :SetServiceStartup WlanSvc auto
@@ -3729,7 +3729,6 @@ ECHO.
 :windowsservicedelayedauto
 Call :LOG Changing less essential services to delayed-auto
 call :SetServiceStartup BITS delayed-auto
-call :SetServiceStartup W32Time auto
 call :SetServiceStartup WSearch delayed-auto
 call :SetServiceStartup wudfsvc delayed-auto
 ::omit call :SetServiceStartup MapsBroker delayed-auto
@@ -3756,12 +3755,27 @@ call :LOG        Enabling System-wide Registry Improvements
 call :LOG ********************************************************************************
 echo(
 
+call :LOG Applying resolved Windows Prefetch and PreLaunch policy
 
-call :LOG Applying resolved Windows Prefetch policy
 if /I "!TBOK_PREFETCH_POLICY!"=="Unchanged" (
-    call :LOG Windows Prefetch configuration was left unchanged.
+    call :LOG Windows EnablePrefetcher configuration was left unchanged.
 ) else (
-    call :SetRegistryValue "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" "EnablePrefetcher" "REG_DWORD" "!TBOK_PREFETCH_POLICY!" "Windows EnablePrefetcher"
+    call :SetRegistryValue ^
+        "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" ^
+        "EnablePrefetcher" ^
+        "REG_DWORD" ^
+        "!TBOK_PREFETCH_POLICY!" ^
+        "Windows EnablePrefetcher"
+)
+if /I "!TBOK_PRELAUNCH_POLICY!"=="Unchanged" (
+    call :LOG Windows Application PreLaunch configuration was left unchanged.
+) else (
+    call :SetRegistryValue ^
+        "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" ^
+        "EnableSuperfetch" ^
+        "REG_DWORD" ^
+        "!TBOK_PRELAUNCH_POLICY!" ^
+        "Windows Application PreLaunch"
 )
 
 call :LOG Disabling network throttling
@@ -3774,7 +3788,7 @@ call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" "REG_DWORD" "10" "SystemResponsiveness"
 
 call :LOG Speed up shutdown time
-call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "15000" "WaitToKillServiceTimeout"
+call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "5000" "WaitToKillServiceTimeout"
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
 call :SetAllControlSetValues "Control\FileSystem" "LongPathsEnabled" "REG_DWORD" "1" "LongPathsEnabled"
@@ -4844,32 +4858,49 @@ endlocal
 call :LOG %~2 was closed successfully.
 exit /b 2
 
+:StopServiceForCleanup
+:: 0 = stopped by TBOK; 1 = not running; 2 = stop failed.
+setlocal DisableDelayedExpansion
+sc.exe query "%~1" 2>nul | findstr /R /C:"STATE *: *4 " >nul
+if errorlevel 1 (endlocal & exit /b 1)
+net.exe stop "%~1" /y >nul 2>&1
+if errorlevel 1 (endlocal & call :LOG WARNING: Service %~1 could not be stopped for cleanup. & exit /b 2)
+endlocal & call :LOG Temporarily stopped service %~1 for cleanup.
+exit /b 0
+
+:RestoreServiceAfterCleanup
+if not "%~2"=="0" exit /b 0
+net.exe start "%~1" >nul 2>&1
+if errorlevel 1 (call :LOG WARNING: Service %~1 was running before cleanup but could not be restarted. & exit /b 1)
+call :LOG Restored service %~1 to its pre-cleanup running state.
+exit /b 0
+
 :BeardSweeper
 call :LOG BeardSweeper performs aggressive system, application, and disk cleanup.
 call :LOG Running applications are terminated only during interactive cleanup.
 call :LOG Noninteractive cleanup preserves application processes and Windows rollback installation files.
 cls
 	call :LOG  Beard Sweeper, TBOK automagic disk cleanup script!
-	call :LOG  	Version 10-27-2026 mm/dd/yyyy
+	call :LOG  	Version Version %version% %verdate%
 	ECHO.
-	ECHO __/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\_________/\\\\\_______/\\\________/\\\_
-	ECHO  _\///////\\\/////__\/\\\/////////\\\_____/\\\///\\\____\/\\\_____/\\\//__
-	ECHO   _______\/\\\_______\/\\\_______\/\\\___/\\\/__\///\\\__\/\\\__/\\\//_____
-	ECHO    _______\/\\\_______\/\\\\\\\\\\\\\\___/\\\______\//\\\_\/\\\\\\//\\\_____
-	ECHO     _______\/\\\_______\/\\\/////////\\\_\/\\\_______\/\\\_\/\\\//_\//\\\____
-	ECHO      _______\/\\\_______\/\\\_______\/\\\_\//\\\______/\\\__\/\\\____\//\\\___
-	ECHO       _______\/\\\_______\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_____\//\\\__
-	ECHO        _______\/\\\_______\/\\\\\\\\\\\\\/_____\///\\\\\/_____\/\\\______\//\\\_
-	ECHO         _______\///________\/////////////_________\/////_______\///________\///__
+	ECHO     __/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\_________/\\\\\_______/\\\________/\\\_
+	ECHO      _\///////\\\/////__\/\\\/////////\\\_____/\\\///\\\____\/\\\_____/\\\//__
+	ECHO       _______\/\\\_______\/\\\_______\/\\\___/\\\/__\///\\\__\/\\\__/\\\//_____
+	ECHO        _______\/\\\_______\/\\\\\\\\\\\\\\___/\\\______\//\\\_\/\\\\\\//\\\_____
+	ECHO         _______\/\\\_______\/\\\/////////\\\_\/\\\_______\/\\\_\/\\\//_\//\\\____
+	ECHO          _______\/\\\_______\/\\\_______\/\\\_\//\\\______/\\\__\/\\\____\//\\\___
+	ECHO           _______\/\\\_______\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_____\//\\\__
+	ECHO            _______\/\\\_______\/\\\\\\\\\\\\\/_____\///\\\\\/_____\/\\\______\//\\\_
+	ECHO             _______\///________\/////////////_________\/////_______\///________\///__
     ECHO.
 	ECHO.	Community effort can be tracked at https://github.com/TheBeardofKnowledge/Scripts-from-my-videos
 	ECHO.	Purpose of this batch file is to recover as much "safe" free space from your windows system drive
 	ECHO.	to gain back free space that Windows, other programs, and users have consumed.
 	ECHO. 	Credits: Because the work we do in I.T. is often unrecognized, this section will show anyone
 	ECHO. 	who contributes to the script to improve it - Thank you to all that have helped and tested.
-	ECHO. 	TheBeardofKnowledge https://thebeardofknowledge.bio.link/
-	ECHO. 	Credit...RayneDance.. https://github.com/RayneDance For improving chrome-edge profile handling
-	ECHO. 	Credit...WebFoundUs.. https://tiktok.com/webb_found_us For the Name "Beard Sweeper"
+	ECHO. 	TheBeardofKnowledge     https://thebeardofknowledge.bio.link/
+	ECHO. 	Credit...WebFoundUs..   https://tiktok.com/webb_found_us For the Name "Beard Sweeper"
+	ECHO. 	Credit...RayneDance..   https://github.com/RayneDance For improving web browser profile handling
 	ECHO.	Credit...tristanghanks..https://github.com/tristanghanks for catching and fixing all typo errors
 	ECHO.
 :StartofScript
@@ -4902,22 +4933,24 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 
 :BadPrintJobs
 	ECHO Deleting unreleased erroneous print jobs
-	NET STOP /Y Spooler >nul 2>&1
-	DEL /S /Q /F %systemroot%\system32\spool\printers\*.* >nul 2>&1
-	net start spooler >nul 2>&1
-
+	call :StopServiceForCleanup "Spooler"
+	set "SpoolerCleanupState=!ERRORLEVEL!"
+	DEL /S /Q /F "%systemroot%\system32\spool\printers\*.*" >nul 2>&1
+	call :RestoreServiceAfterCleanup "Spooler" "!SpoolerCleanupState!"
+	
 :fontcache
 	ECHO Clearing all Windows Font Cache
-	Net stop fontcache >nul 2>&1
-	DEL /S /Q /F %systemroot%\ServiceProfiles\LocalService\AppData\Local\FontCache\*.* >nul 2>&1
-	NET start fontcache	>nul 2>&1
+	call :StopServiceForCleanup "FontCache"
+	set "FontCacheCleanupState=!ERRORLEVEL!"
+	DEL /S /Q /F "%systemroot%\ServiceProfiles\LocalService\AppData\Local\FontCache\*.*" >nul 2>&1
+	call :RestoreServiceAfterCleanup "FontCache" "!FontCacheCleanupState!"
 
 :WindowsUpdatesCleanup
 	ECHO Performing Windows Updates Cleanup
-	net stop bits >nul 2>&1
-	net stop wuauserv >nul 2>&1
-	net stop appidsvc >nul 2>&1
-	net stop cryptsvc >nul 2>&1
+	for %%S in (BITS wuauserv AppIDSvc CryptSvc) do (
+		call :StopServiceForCleanup "%%S"
+		set "CleanupState_%%S=!ERRORLEVEL!"
+	)
 	ECHO Clearing Windows Update Cache
 	DEL /S /Q /F "%ALLUSERSPROFILE%\Application Data\Microsoft\Network\Downloader\*.*"	>nul 2>&1
 	rmdir /S /Q "%systemroot%\SoftwareDistribution" >nul 2>&1
@@ -4926,11 +4959,11 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 ::If you don't care about rolling back updates (DANGER Will Robinson), remove the :: in front of the next line.
 ::rmdir /S /Q "%systemroot%\Installer\$PatchCache$"  >nul 2>&1
 	DEL /S /Q /F "%systemroot%\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Logs\*.*" >nul 2>&1
-	ECHO Cleanup Complete - Starting Windows Update Services
-	net start bits >nul 2>&1
-	net start wuauserv >nul 2>&1
-	net start appidsvc >nul 2>&1
-	net start cryptsvc >nul 2>&1
+	ECHO Cleanup Complete - Restoring previous Windows Update service states
+	for %%S in (BITS wuauserv AppIDSvc CryptSvc) do (
+		call :RestoreServiceAfterCleanup "%%S" "!CleanupState_%%S!"
+		set "CleanupState_%%S="
+	)
 ::for extra aggressive Windows Image cleanup uncomment the next line by removing the :: but keep in mind you won't be able to revert this cleanup
 	::DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase
 
@@ -4969,8 +5002,10 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\explorer\thumbcache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
 	:: Preserve Office owner and AutoRecover files that may indicate open or unsaved work.
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
@@ -5001,8 +5036,8 @@ if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: iTunes mobile-device backups will be preserved.
     goto :FreakenMicrosoftTeams
 )
-ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is Y
-CHOICE /C YN /N /T 10 /D Y
+ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :FreakenMicrosoftTeams
 IF ERRORLEVEL 1 GOTO :iOSbackups
@@ -5324,7 +5359,7 @@ if not "!CleanMgrRC!"=="0" exit /b 1
 if not "!ComponentCleanupRC!"=="0" exit /b 1
 if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: restore-point and previous-Windows-install removal was skipped.
-    goto :END
+    goto :BeardsweeperEND
 )
 
 :PreviousWindowsInstalls
@@ -5479,7 +5514,9 @@ call :LOG Restarting PC.
 call :CleanupTemporaryPlans
 set "TBOK_EXIT_RC=0"
 if defined TBOK_FINAL_RC set "TBOK_EXIT_RC=!TBOK_FINAL_RC!"
-endlocal & shutdown.exe /r /t 0 & exit /b %TBOK_EXIT_RC%
+endlocal
+shutdown.exe /r /t 1
+exit /b %TBOK_EXIT_RC%
 
 :EXIT
 call :LOG Script exiting.
@@ -5487,4 +5524,5 @@ call :CleanupTemporaryPlans
 call :Delay 10
 set "TBOK_EXIT_RC=0"
 if defined TBOK_FINAL_RC set "TBOK_EXIT_RC=!TBOK_FINAL_RC!"
-endlocal & exit /b %TBOK_EXIT_RC%
+endlocal
+exit /b %TBOK_EXIT_RC%
