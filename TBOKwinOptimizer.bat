@@ -73,12 +73,31 @@ set "CLR_WHITE=%ESC%[97m"
 
 ::Script release version and release date
 :ScriptVersion
-set "VERSION=1.7.1"
+set "VERSION=1.7.2"
 set "VERDATE=10-28-2026"
 
+::TBOK-UPDATE-START::
+:: Compare against the actual BAT asset in the latest official GitHub Release.
+if defined TBOK_SKIP_AUTO_UPDATE goto :AutoUpdateComplete
+cls
+echo Checking the TBOKwinOptimizer.bat asset in the latest official GitHub Release...
+set "TBOK_UPDATE_RESULT=%TEMP%\TBOK-Update-%RANDOM%-%RANDOM%.exit"
+call :CheckForUpdates
+if errorlevel 10 (
+    for /f "usebackq delims=" %%R in ("%TBOK_UPDATE_RESULT%") do (
+        del /q "%TBOK_UPDATE_RESULT%" >nul 2>&1
+        exit /b %%R
+    )
+    del /q "%TBOK_UPDATE_RESULT%" >nul 2>&1
+    exit /b 1
+)
+if exist "%TBOK_UPDATE_RESULT%" del /q "%TBOK_UPDATE_RESULT%" >nul 2>&1
+set "TBOK_UPDATE_RESULT="
+
+:AutoUpdateComplete
+::TBOK-UPDATE-END::
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
-cls
 echo Checking for Admin permissions using fltmc, No changes are being made at this time.
 
 "%SystemRoot%\System32\fltmc.exe" >nul 2>&1
@@ -2891,6 +2910,7 @@ exit /b 0
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::        $argumentLine = $Arguments -join ' '
 ::TBOK-REMOTE-PS::        $commandLine = '/d /c ""{0}" {1}"' -f $RemoteBatch, $argumentLine
+::TBOK-REMOTE-PS::        $env:TBOK_SKIP_AUTO_UPDATE = '1'
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::        $process = Start-Process `
 ::TBOK-REMOTE-PS::            -FilePath $env:ComSpec `
@@ -5488,3 +5508,118 @@ call :Delay 10
 set "TBOK_EXIT_RC=0"
 if defined TBOK_FINAL_RC set "TBOK_EXIT_RC=!TBOK_FINAL_RC!"
 endlocal & exit /b %TBOK_EXIT_RC%
+
+:CheckForUpdates
+setlocal DisableDelayedExpansion
+if not exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" (
+    endlocal
+    exit /b 0
+)
+
+set "TBOK_UPDATE_HELPER=%TEMP%\TBOK-Update-%RANDOM%-%RANDOM%.ps1"
+set "TBOK_UPDATE_RAW=%TEMP%\TBOK-Update-%RANDOM%-%RANDOM%.raw"
+findstr /B /L /C:"::TBOK-UPDATE-PS::" "%~f0" >"%TBOK_UPDATE_RAW%"
+if errorlevel 1 goto :CheckForUpdatesCleanup
+
+set "TBOK_UPDATE_RAW_ENV=%TBOK_UPDATE_RAW%"
+set "TBOK_UPDATE_HELPER_ENV=%TBOK_UPDATE_HELPER%"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$prefix='::TBOK-UPDATE-PS::';$lines=Get-Content -LiteralPath $env:TBOK_UPDATE_RAW_ENV -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};if(-not $output){exit 1};Set-Content -LiteralPath $env:TBOK_UPDATE_HELPER_ENV -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0"
+set "TBOK_UPDATE_EXTRACT_RC=%ERRORLEVEL%"
+set "TBOK_UPDATE_RAW_ENV="
+set "TBOK_UPDATE_HELPER_ENV="
+if not "%TBOK_UPDATE_EXTRACT_RC%"=="0" goto :CheckForUpdatesCleanup
+
+set "TBOK_UPDATE_SCRIPT=%~f0"
+set "TBOK_UPDATE_ARGUMENTS=%*"
+set "TBOK_UPDATE_WORKDIR=%CD%"
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%TBOK_UPDATE_HELPER%"
+set "TBOK_UPDATE_RC=%ERRORLEVEL%"
+set "TBOK_UPDATE_SCRIPT="
+set "TBOK_UPDATE_ARGUMENTS="
+set "TBOK_UPDATE_WORKDIR="
+if "%TBOK_UPDATE_RC%"=="10" goto :CheckForUpdatesUpdated
+
+:CheckForUpdatesCleanup
+if defined TBOK_UPDATE_HELPER if exist "%TBOK_UPDATE_HELPER%" del /q "%TBOK_UPDATE_HELPER%" >nul 2>&1
+if defined TBOK_UPDATE_RAW if exist "%TBOK_UPDATE_RAW%" del /q "%TBOK_UPDATE_RAW%" >nul 2>&1
+endlocal
+exit /b 0
+
+:CheckForUpdatesUpdated
+if defined TBOK_UPDATE_HELPER if exist "%TBOK_UPDATE_HELPER%" del /q "%TBOK_UPDATE_HELPER%" >nul 2>&1
+if defined TBOK_UPDATE_RAW if exist "%TBOK_UPDATE_RAW%" del /q "%TBOK_UPDATE_RAW%" >nul 2>&1
+endlocal
+exit /b 10
+
+::TBOK-UPDATE-PS::$ErrorActionPreference = 'Stop'
+::TBOK-UPDATE-PS::$scriptDirectory = Split-Path -Parent $env:TBOK_UPDATE_SCRIPT
+::TBOK-UPDATE-PS::$payloadPath = Join-Path $scriptDirectory 'TBOKwinOptimizer-OfficialRelease.bat'
+::TBOK-UPDATE-PS::$stagedPath = $payloadPath + '.update'
+::TBOK-UPDATE-PS::$backupPath = $payloadPath + '.previous'
+::TBOK-UPDATE-PS::$downloadPath = Join-Path $env:TEMP ('TBOK-Update-' + [Guid]::NewGuid().ToString('N') + '.bat')
+::TBOK-UPDATE-PS::function Get-FileSha256 {
+::TBOK-UPDATE-PS::    param([string]$Path)
+::TBOK-UPDATE-PS::    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+::TBOK-UPDATE-PS::}
+::TBOK-UPDATE-PS::function Start-TBOKScript {
+::TBOK-UPDATE-PS::    param([string]$Path)
+::TBOK-UPDATE-PS::    $quote = [char]34
+::TBOK-UPDATE-PS::    $batchCommand = $quote + $Path + $quote
+::TBOK-UPDATE-PS::    if ($env:TBOK_UPDATE_ARGUMENTS) { $batchCommand += ' ' + $env:TBOK_UPDATE_ARGUMENTS }
+::TBOK-UPDATE-PS::    $commandArguments = '/d /c ' + $quote + $batchCommand + $quote
+::TBOK-UPDATE-PS::    $process = Start-Process -FilePath $env:ComSpec -ArgumentList $commandArguments -WorkingDirectory $env:TBOK_UPDATE_WORKDIR -NoNewWindow -Wait -PassThru
+::TBOK-UPDATE-PS::    return [int]$process.ExitCode
+::TBOK-UPDATE-PS::}
+::TBOK-UPDATE-PS::try {
+::TBOK-UPDATE-PS::    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+::TBOK-UPDATE-PS::    $release = Invoke-RestMethod `
+::TBOK-UPDATE-PS::        -Uri 'https://api.github.com/repos/TheBeardofKnowledge/TBOK-Win11Optimizer/releases/latest' `
+::TBOK-UPDATE-PS::        -Headers @{ 'User-Agent' = 'TBOK-Win11Optimizer'; 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' } `
+::TBOK-UPDATE-PS::        -TimeoutSec 10
+::TBOK-UPDATE-PS::    if ($release.draft -or $release.prerelease -or $release.tag_name -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'GitHub did not return a stable semantic release' }
+::TBOK-UPDATE-PS::    $asset = @($release.assets | Where-Object { $_.name -eq 'TBOKwinOptimizer.bat' })
+::TBOK-UPDATE-PS::    if ($asset.Count -ne 1) { throw 'The stable release must contain exactly one TBOKwinOptimizer.bat asset' }
+::TBOK-UPDATE-PS::    $assetUri = [Uri]$asset[0].browser_download_url
+::TBOK-UPDATE-PS::    $expectedPath = '/TheBeardofKnowledge/TBOK-Win11Optimizer/releases/download/' + $release.tag_name + '/TBOKwinOptimizer.bat'
+::TBOK-UPDATE-PS::    if ($assetUri.Host -ne 'github.com' -or $assetUri.AbsolutePath -ne $expectedPath) { throw 'The release asset URL did not match the expected upstream asset' }
+::TBOK-UPDATE-PS::    if ($asset[0].digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw 'The release asset did not publish a SHA-256 digest' }
+::TBOK-UPDATE-PS::    $expectedHash = $Matches[1].ToLowerInvariant()
+::TBOK-UPDATE-PS::    Write-Host ('Latest official release: ' + $release.tag_name + '.')
+::TBOK-UPDATE-PS::    $installedHash = Get-FileSha256 -Path $env:TBOK_UPDATE_SCRIPT
+::TBOK-UPDATE-PS::    if ($installedHash -eq $expectedHash) {
+::TBOK-UPDATE-PS::        Write-Host ('Installed file matches the official release asset SHA-256: ' + $expectedHash)
+::TBOK-UPDATE-PS::        exit 0
+::TBOK-UPDATE-PS::    }
+::TBOK-UPDATE-PS::    Write-Host ('Installed file differs from the official release asset. Installed SHA-256: ' + $installedHash + '; release SHA-256: ' + $expectedHash)
+::TBOK-UPDATE-PS::    $payloadReady = $false
+::TBOK-UPDATE-PS::    if (Test-Path -LiteralPath $payloadPath) {
+::TBOK-UPDATE-PS::        $payloadHash = Get-FileSha256 -Path $payloadPath
+::TBOK-UPDATE-PS::        $payloadReady = $payloadHash -eq $expectedHash
+::TBOK-UPDATE-PS::    }
+::TBOK-UPDATE-PS::    if (-not $payloadReady) {
+::TBOK-UPDATE-PS::        Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile $downloadPath -UseBasicParsing -TimeoutSec 30
+::TBOK-UPDATE-PS::        if ((Get-Item -LiteralPath $downloadPath).Length -ne [long]$asset[0].size) { throw 'The downloaded file size did not match the release metadata' }
+::TBOK-UPDATE-PS::        $downloadHash = Get-FileSha256 -Path $downloadPath
+::TBOK-UPDATE-PS::        if ($downloadHash -ne $expectedHash) { throw 'The downloaded file SHA-256 did not match the official release asset digest' }
+::TBOK-UPDATE-PS::        Copy-Item -LiteralPath $downloadPath -Destination $stagedPath -Force
+::TBOK-UPDATE-PS::        if (Test-Path -LiteralPath $payloadPath) {
+::TBOK-UPDATE-PS::            if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force }
+::TBOK-UPDATE-PS::            [IO.File]::Replace($stagedPath, $payloadPath, $backupPath)
+::TBOK-UPDATE-PS::        }
+::TBOK-UPDATE-PS::        else { [IO.File]::Move($stagedPath, $payloadPath) }
+::TBOK-UPDATE-PS::        $payloadReady = $true
+::TBOK-UPDATE-PS::    }
+::TBOK-UPDATE-PS::    Write-Host ('Running the BAT verified against official release ' + $release.tag_name + '.')
+::TBOK-UPDATE-PS::    $env:TBOK_SKIP_AUTO_UPDATE = '1'
+::TBOK-UPDATE-PS::    $processExitCode = Start-TBOKScript -Path $payloadPath
+::TBOK-UPDATE-PS::    [IO.File]::WriteAllText($env:TBOK_UPDATE_RESULT, [string]$processExitCode, [Text.Encoding]::ASCII)
+::TBOK-UPDATE-PS::    exit 10
+::TBOK-UPDATE-PS::}
+::TBOK-UPDATE-PS::catch {
+::TBOK-UPDATE-PS::    Write-Host ('Could not verify or run the official GitHub Release; continuing with the installed file. ' + $_.Exception.Message)
+::TBOK-UPDATE-PS::    exit 0
+::TBOK-UPDATE-PS::}
+::TBOK-UPDATE-PS::finally {
+::TBOK-UPDATE-PS::    Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
+::TBOK-UPDATE-PS::    Remove-Item -LiteralPath $stagedPath -Force -ErrorAction SilentlyContinue
+::TBOK-UPDATE-PS::}
