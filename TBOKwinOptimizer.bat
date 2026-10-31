@@ -39,11 +39,33 @@
 
 ::turn off echoing all commands
 @ECHO OFF
+::Relaunch under the native 64-bit cmd.exe when started from a 32-bit host (many RMM
+::agents and deployment tools are 32-bit). Under WOW64, System32 is redirected to
+::SysWOW64 and HKLM\SOFTWARE writes are redirected to WOW6432Node, so settings would be
+::reported as applied while landing where 64-bit Windows never reads them.
+::exit /b without a number keeps the 64-bit run's exit code.
+if defined PROCESSOR_ARCHITEW6432 if exist "%SystemRoot%\Sysnative\cmd.exe" (
+    "%SystemRoot%\Sysnative\cmd.exe" /d /c ""%~f0" %*"
+    exit /b
+)
 ::change the terminal color to something friendlier
 color f0
 
 ::enable holding variables during script,explicitely enable command extensions, disable variable expansions
 setlocal EnableExtensions DisableDelayedExpansion
+
+::Security: never resolve bare command names from the current directory.
+::cmd searches the current directory before PATH. This script calls powershell.exe, REG,
+::findstr, sc, net, choice and others by bare name, and its working directory is normally
+::the folder it was launched from (Downloads, a deployment share, or the remote staging
+::folder). Any executable or .bat/.cmd placed there under one of those names would run with
+::this script's administrative rights. Disable current-directory lookup and work from
+::System32. The script locates its own files through %~dp0, so nothing else changes.
+::TBOK_START_DIR keeps the launch directory for resolving relative /REMOTELIST paths.
+::The directory change is scoped by the SETLOCAL above and is undone when the script ends.
+set "NoDefaultCurrentDirectoryInExePath=1"
+set "TBOK_START_DIR=%CD%"
+cd /d "%SystemRoot%\System32"
 
 ::add ANSI color support
 for /f %%A in ('echo prompt $E^| cmd') do set "ESC=%%A"
@@ -234,6 +256,9 @@ goto :Switches
 :: During analysis-progress mode, normal messages are logged but not echoed.
 :: During profile-summary mode, routine messages are suppressed while
 :: ERROR and WARNING messages remain visible.
+:: Security: the message is captured with delayed expansion disabled and printed with
+:: delayed expansion enabled. Delayed expansion inserts the text after cmd has parsed
+:: the line, so & | < > ^ inside a message are printed, never executed.
 setlocal DisableDelayedExpansion
 
 set "LogMessage=%*"
@@ -247,14 +272,10 @@ if defined TBOK_PROFILE_SUMMARY_MODE (
         )
     )
 )
-if defined TBOK_ANALYSIS_PROGRESS_ACTIVE (
-    >>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
-    endlocal
-    exit /b 0
-)
-echo(%LogMessage%
->>"%LOGFILE%" echo([%DATE% %TIME%] %LogMessage%
-
+setlocal EnableDelayedExpansion
+if not defined TBOK_ANALYSIS_PROGRESS_ACTIVE echo(!LogMessage!
+>>"!LOGFILE!" echo([!DATE! !TIME!] !LogMessage!
+endlocal
 endlocal
 exit /b 0
 
@@ -508,6 +529,13 @@ if not exist "!TBOK_PROFILE_BACKUP_DIR!" (
     set "TBOK_PROFILE_BACKUP_DIR="
 ) else (
     call :LOG Fallback registry backup directory: !TBOK_PROFILE_BACKUP_DIR!
+    REM Security: this folder receives full exports of HKLM and every user hive, plus
+    REM NTUSER.DAT copies. Restrict it to SYSTEM and Administrators instead of inheriting
+    REM the permissions of the folder the script was launched from.
+    icacls "!TBOK_PROFILE_BACKUP_DIR!" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" >>"%LOGFILE%" 2>&1
+    if errorlevel 1 (
+        call :LOG WARNING: Could not restrict permissions on the fallback backup directory.
+    )
 )
 :RestorePointDiagnostics
 call :LOG Collecting restore-point diagnostics...
@@ -2168,10 +2196,12 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 
 set "TBOK_MEMORY_RC=%ERRORLEVEL%"
 
+:: Security: the snapshot lists process names, which any local user controls. Copy the
+:: file as data rather than passing each line through CALL :LOG, so a process whose name
+:: contains & cannot inject a command into this elevated session.
 if exist "%TBOK_MEMORY_FILE%" (
-    for /f "usebackq delims=" %%M in ("%TBOK_MEMORY_FILE%") do (
-        call :LOG %%M
-    )
+    if not defined TBOK_ANALYSIS_PROGRESS_ACTIVE type "%TBOK_MEMORY_FILE%"
+    >>"%LOGFILE%" type "%TBOK_MEMORY_FILE%"
     del /q "%TBOK_MEMORY_FILE%" >nul 2>&1
 )
 if not "%TBOK_MEMORY_RC%"=="0" (
@@ -2653,6 +2683,12 @@ set "RemoteListFailed=0"
 set "RemoteListSkipped=0"
 set "RemoteListFailedHosts="
 
+:: The script runs from System32 (see the security note at the top), so first resolve a
+:: relative list path against the directory the script was launched from.
+if exist "!TBOK_START_DIR!\!RemoteListPath!" (
+    set "RemoteListPath=!TBOK_START_DIR!\!RemoteListPath!"
+)
+
 :: Resolve relative list paths beside the TBOK batch file.
 if not exist "!RemoteListPath!" (
     if exist "%~dp0!RemoteListPath!" (
@@ -2815,9 +2851,10 @@ exit /b 0
 
 ::TBOK-REMOTE-PS::$ErrorActionPreference = 'Stop'
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::$remoteDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::# Set after the session opens: a new private folder per run (see below).
+::TBOK-REMOTE-PS::$remoteDirectory = $null
 ::TBOK-REMOTE-PS::$remoteBatchName = Split-Path -Leaf $BatchPath
-::TBOK-REMOTE-PS::$remoteBatchPath = Join-Path $remoteDirectory $remoteBatchName
+::TBOK-REMOTE-PS::$remoteBatchPath = $null
 ::TBOK-REMOTE-PS::$session = $null
 ::TBOK-REMOTE-PS::$remoteExitCode = 1
 ::TBOK-REMOTE-PS::
@@ -2862,14 +2899,38 @@ exit /b 0
 ::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::    }
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    Write-Host "Preparing remote working directory: $remoteDirectory"
+::TBOK-REMOTE-PS::    Write-Host 'Preparing a private remote working directory...'
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
-::TBOK-REMOTE-PS::        param($Directory)
+::TBOK-REMOTE-PS::    # Security: standard users can create files and folders under C:\ProgramData.
+::TBOK-REMOTE-PS::    # A fixed folder there with inherited permissions lets any local user pre-create
+::TBOK-REMOTE-PS::    # it (and own it), plant executables in it, or replace the batch file between
+::TBOK-REMOTE-PS::    # the copy and the elevated run. Create a new, randomly named folder whose ACL
+::TBOK-REMOTE-PS::    # grants access only to SYSTEM and Administrators, set at creation time, and
+::TBOK-REMOTE-PS::    # refuse to reuse a folder that already exists.
+::TBOK-REMOTE-PS::    $remoteDirectory = Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        $directory = Join-Path $env:ProgramData ('TBOK-' + [guid]::NewGuid().ToString('N'))
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        New-Item -Path $Directory -ItemType Directory -Force |
-::TBOK-REMOTE-PS::            Out-Null
-::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory
+::TBOK-REMOTE-PS::        if (Test-Path -LiteralPath $directory) {
+::TBOK-REMOTE-PS::            throw "Remote staging directory already exists: $directory"
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        $security = New-Object System.Security.AccessControl.DirectorySecurity
+::TBOK-REMOTE-PS::        $security.SetAccessRuleProtection($true, $false)
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+::TBOK-REMOTE-PS::            $identity = New-Object System.Security.Principal.SecurityIdentifier $sid
+::TBOK-REMOTE-PS::            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule `
+::TBOK-REMOTE-PS::                $identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+::TBOK-REMOTE-PS::            $security.AddAccessRule($rule)
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::        [void][System.IO.Directory]::CreateDirectory($directory, $security)
+::TBOK-REMOTE-PS::        return $directory
+::TBOK-REMOTE-PS::    }
+::TBOK-REMOTE-PS::
+::TBOK-REMOTE-PS::    $remoteDirectory = [string]$remoteDirectory
+::TBOK-REMOTE-PS::    $remoteBatchPath = Join-Path $remoteDirectory $remoteBatchName
+::TBOK-REMOTE-PS::    Write-Host "Remote working directory: $remoteDirectory"
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Write-Host "Copying $remoteBatchName to $ComputerName..."
 ::TBOK-REMOTE-PS::
@@ -2954,24 +3015,27 @@ exit /b 0
 ::TBOK-REMOTE-PS::    Write-Host 'Removing remote TBOK execution artifacts...'
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Invoke-Command -Session $session -ScriptBlock {
+::TBOK-REMOTE-PS::        param($Directory)
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        $tbokDirectory = 'C:\ProgramData\TBOK'
+::TBOK-REMOTE-PS::        if (-not $Directory -or (Split-Path -Leaf $Directory) -notlike 'TBOK-*') { return }
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        Get-ChildItem `
-::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
-::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.log' `
-::TBOK-REMOTE-PS::            -File `
-::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::        Get-ChildItem -LiteralPath $Directory -File -ErrorAction SilentlyContinue |
+::TBOK-REMOTE-PS::            Where-Object { $_.Name -like 'TBOKwinOptimizer*.log' -or $_.Name -like '*.bat' } |
 ::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::        Get-ChildItem `
-::TBOK-REMOTE-PS::            -LiteralPath $tbokDirectory `
-::TBOK-REMOTE-PS::            -Filter 'TBOKwinOptimizer-*.bat' `
-::TBOK-REMOTE-PS::            -File `
-::TBOK-REMOTE-PS::            -ErrorAction SilentlyContinue |
-::TBOK-REMOTE-PS::                Remove-Item -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::        # Fallback registry backups (created when a restore point fails) are the
+::TBOK-REMOTE-PS::        # rollback path for this machine, so keep them. The folder is readable only
+::TBOK-REMOTE-PS::        # by SYSTEM and Administrators. Remove it only when nothing is left.
+::TBOK-REMOTE-PS::        if (@(Get-ChildItem -LiteralPath $Directory -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+::TBOK-REMOTE-PS::            Remove-Item -LiteralPath $Directory -Force -ErrorAction SilentlyContinue
+::TBOK-REMOTE-PS::            return $null
+::TBOK-REMOTE-PS::        }
+::TBOK-REMOTE-PS::        return $Directory
 ::TBOK-REMOTE-PS::
-::TBOK-REMOTE-PS::    } -ErrorAction Stop
+::TBOK-REMOTE-PS::    } -ArgumentList $remoteDirectory -ErrorAction Stop |
+::TBOK-REMOTE-PS::        ForEach-Object {
+::TBOK-REMOTE-PS::            if ($_) { Write-Host "Rollback backups were kept on $ComputerName in: $_" }
+::TBOK-REMOTE-PS::        }
 ::TBOK-REMOTE-PS::
 ::TBOK-REMOTE-PS::    Write-Host 'Remote batch and log files removed successfully.'
 ::TBOK-REMOTE-PS::
