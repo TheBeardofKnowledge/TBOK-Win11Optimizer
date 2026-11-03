@@ -16,11 +16,13 @@
 :: If you want to learn more about each command, use what I use learn.microsoft.com
 :: READY... Lets go
 :: FYI you can now run this script on remote computer using the following switches for a menuless run:
-::   /optimize - runs the main routine to optimize and debloat 
+::   /optimize - runs the main routine to optimize and debloat
 ::   /cleanup - Agressive disk cleanup using my BeardSweeper script
-::   /gaming - apply gaming tweaks 
+::   /gaming - apply gaming tweaks
 ::   /winget - full auto software update using WinGet
 ::   /newlog - starts a new log file for the workstation being run on, if not it will reuse existing
+::   /allowforceclose - opt in to AutoEndTasks, which may force-close apps at shutdown
+::   /resetexplorerviews - opt in to resetting per-user Explorer folder views
 ::   /restart - restarts the computer after all requested noninteractive operations complete
 ::   /remote COMPUTERNAME - copies TBOK to the remote workstation and executes the requested
 ::    noninteractive operations there, retrieves logs to the local script directory,
@@ -30,7 +32,7 @@
 :: lines beginning with # are ignored.
 :: Example:
 :: TBOKwinOptimizer-Vx-x-x.bat /OPTIMIZE /CLEANUP /RESTART /REMOTELIST computers.txt
-::   Requirements for /remote and /Remotelist: 
+::   Requirements for /remote and /Remotelist:
 ::   The destination must accept WS-Management remoting connections
 ::   The source computer account must have administrative rights on the remote computer
 
@@ -69,10 +71,10 @@ set "CLR_CYAN=%ESC%[96m"
 set "CLR_WHITE=%ESC%[97m"
 
 
-::Script release version and release date 
+::Script release version and release date
 :ScriptVersion
-set "VERSION=1.7.1"
-set "VERDATE=10-28-2026"
+set "VERSION=1.7.2"
+set "VERDATE=10-30-2026"
 
 :Elevation
 :: Automatically check for and obtain administrative elevation, retain working directory, allow special characters in path names
@@ -129,7 +131,7 @@ exit /b 0
 
 :GotPrivileges
 ECHO Script elevated successfully
-
+ECHO Checking PowerShell Requirements
 call :CheckPowerShellRequirements
 
 if errorlevel 1 (
@@ -140,6 +142,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+ECHO.
 ECHO Analyzing System to create optimized plan, please wait...
 call :ShowAnalysisProgress 0 "Starting system analysis"
 
@@ -294,6 +297,16 @@ if /I "%~1"=="/RESTART" (
     shift
     goto :ParseNextArgument
 )
+if /I "%~1"=="/ALLOWFORCECLOSE" (
+    set "TBOK_ALLOWFORCECLOSE=1"
+    shift
+    goto :ParseNextArgument
+)
+if /I "%~1"=="/RESETEXPLORERVIEWS" (
+    set "TBOK_RESET_EXPLORERVIEWS=1"
+    shift
+    goto :ParseNextArgument
+)
 if /I "%~1"=="/EXIT" (
     set "TBOK_RUN_EXIT=1"
     shift
@@ -440,12 +453,13 @@ call :LOG Setting restore-point creation frequency override...
 set "RestoreFrequencyExisted=0"
 set "RestoreFrequencyValue="
 
-for /f "tokens=3" %%A in ('REG query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency 2^>nul ^| findstr /I "SystemRestorePointCreationFrequency"') do (
+for /f "tokens=3" %%A in ('REG query "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /reg:64 2^>nul ^| findstr /I "SystemRestorePointCreationFrequency"') do (
     set "RestoreFrequencyExisted=1"
     set "RestoreFrequencyValue=%%A"
 )
 REG add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" ^
     /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f ^
+    /reg:64 ^
     >>"%LOGFILE%" 2>&1
 if errorlevel 1 (
     call :LOG WARNING: Could not set SystemRestorePointCreationFrequency.
@@ -752,7 +766,7 @@ call :LOG Restoring previous restore point frequency setting
 if "%RestoreFrequencyExisted%"=="1" (
     REG ADD "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" ^
         /v SystemRestorePointCreationFrequency /t REG_DWORD ^
-        /d "%RestoreFrequencyValue%" /f >>"%LOGFILE%" 2>&1
+        /d "%RestoreFrequencyValue%" /f /reg:64 >>"%LOGFILE%" 2>&1
     if errorlevel 1 (
         endlocal
         call :LOG WARNING: Could not restore the previous SystemRestorePointCreationFrequency value.
@@ -763,7 +777,7 @@ if "%RestoreFrequencyExisted%"=="1" (
     exit /b 0
 )
 REG delete "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" ^
-    /v SystemRestorePointCreationFrequency /f >>"%LOGFILE%" 2>&1
+    /v SystemRestorePointCreationFrequency /f /reg:64 >>"%LOGFILE%" 2>&1
 if errorlevel 1 (
     endlocal
     call :LOG WARNING: Could not remove the temporary SystemRestorePointCreationFrequency override.
@@ -1047,39 +1061,41 @@ if "%TBOK_TASK_PLAN_SIZE%"=="0" (
 call :LOG Applying scheduled-task changes in one PowerShell session...
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$failed = $false;" ^
+    "$failureCount = 0;$requestCount = 0;$disabledCount = 0;$alreadyDisabledCount = 0;$notInstalledCount = 0;$duplicateCount = 0;$seen = @{};" ^
     "$lines = @(Get-Content -LiteralPath $env:TBOK_TASK_PLAN -ErrorAction Stop);" ^
     "$installedTasks = @(Get-ScheduledTask -ErrorAction Stop);" ^
     "foreach ($line in $lines) {" ^
     "    if ($null -eq $line -or $line.Trim().Length -eq 0) { continue };" ^
-    "    $parts = $line.Split('|', 2);" ^
+    "    $requestCount++;$parts = $line.Split('|', 2);" ^
     "    if ($parts.Count -ne 2) {" ^
     "        Write-Output ('ERROR: Invalid task plan entry: ' + $line);" ^
-    "        $failed = $true;" ^
+    "        $failureCount++;" ^
     "        continue;" ^
     "    };" ^
     "    $path = $parts[0].Trim();" ^
     "    $name = $parts[1].Trim();" ^
+    "    $key=($path+$name).ToLowerInvariant();if($seen.ContainsKey($key)){Write-Output ('DUPLICATE: '+$path+$name);$duplicateCount++;continue};$seen[$key]=$true;" ^
     "    $tasks = @($installedTasks | Where-Object { $_.TaskPath -eq $path -and $_.TaskName -eq $name });" ^
     "    if ($tasks.Count -eq 0) {" ^
-    "        Write-Output ('SKIPPED: Task not found: ' + $path + $name);" ^
+    "        Write-Output ('NOT INSTALLED: ' + $path + $name);$notInstalledCount++;" ^
     "        continue;" ^
     "    };" ^
     "    foreach ($task in $tasks) {" ^
     "        try {" ^
     "            if ($task.State -eq 'Disabled') {" ^
-    "                Write-Output ('SKIPPED: Task already disabled: ' + $task.TaskPath + $task.TaskName);" ^
+    "                Write-Output ('ALREADY DISABLED: ' + $task.TaskPath + $task.TaskName);$alreadyDisabledCount++;" ^
     "            } else {" ^
     "                $task | Disable-ScheduledTask -ErrorAction Stop | Out-Null;" ^
-    "                Write-Output ('SUCCESS: Disabled task: ' + $task.TaskPath + $task.TaskName);" ^
+    "                Write-Output ('DISABLED: ' + $task.TaskPath + $task.TaskName);$disabledCount++;" ^
     "            };" ^
     "        } catch {" ^
     "            Write-Output ('ERROR: Failed to disable ' + $task.TaskPath + $task.TaskName + ': ' + $_.Exception.Message);" ^
-    "            $failed = $true;" ^
+    "            $failureCount++;" ^
     "        };" ^
     "    };" ^
     "};" ^
-    "if ($failed) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
+    "Write-Output '';Write-Output 'Scheduled-task plan summary:';Write-Output ('  Requests: '+$requestCount);Write-Output ('  Disabled: '+$disabledCount);Write-Output ('  Already disabled: '+$alreadyDisabledCount);Write-Output ('  Not installed: '+$notInstalledCount);Write-Output ('  Duplicate requests: '+$duplicateCount);Write-Output ('  Failed: '+$failureCount);" ^
+    "if ($failureCount -gt 0) { exit 1 } else { exit 0 }" >>"%LOGFILE%" 2>&1
 
 set "TaskPlanRC=%ERRORLEVEL%"
 
@@ -1087,6 +1103,7 @@ if exist "%TBOK_TASK_PLAN%" (
     del /q "%TBOK_TASK_PLAN%" >nul 2>&1
 )
 endlocal & exit /b %TaskPlanRC%
+
 
 
 :RemoveAppxPattern
@@ -1346,13 +1363,13 @@ set "TBOK_CS_CURRENT_NUMBER="
 set "TBOK_CS_DEFAULT_NUMBER="
 set "TBOK_CS_LASTKNOWNGOOD_NUMBER="
 
-for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v Current 2^>nul ^| findstr /I /C:"Current"') do (
+for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v Current /reg:64 2^>nul ^| findstr /I /C:"Current"') do (
     set /a "TBOK_CS_CURRENT_NUMBER=%%A"
 )
-for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v Default 2^>nul ^| findstr /I /C:"Default"') do (
+for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v Default /reg:64 2^>nul ^| findstr /I /C:"Default"') do (
     set /a "TBOK_CS_DEFAULT_NUMBER=%%A"
 )
-for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v LastKnownGood 2^>nul ^| findstr /I /C:"LastKnownGood"') do (
+for /f "tokens=3" %%A in ('REG query "HKLM\SYSTEM\Select" /v LastKnownGood /reg:64 2^>nul ^| findstr /I /C:"LastKnownGood"') do (
     set /a "TBOK_CS_LASTKNOWNGOOD_NUMBER=%%A"
 )
 if defined TBOK_CS_CURRENT_NUMBER (
@@ -1477,6 +1494,21 @@ set "WriteRC=%ERRORLEVEL%"
 
 endlocal & exit /b %WriteRC%
 
+:DwordValuesMatch
+setlocal DisableDelayedExpansion
+set "TBOK_DWORD_A=%~1"
+set "TBOK_DWORD_B=%~2"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$a=$env:TBOK_DWORD_A;$b=$env:TBOK_DWORD_B;function N($v){if($v -match '^0[xX]'){[Convert]::ToUInt64($v.Substring(2),16)}else{[Convert]::ToUInt64($v,10)}};try{if((N $a) -eq (N $b)){exit 0}else{exit 1}}catch{exit 1}" 2>nul
+set "DwordMatchRC=%ERRORLEVEL%"
+endlocal & exit /b %DwordMatchRC%
+
+:DetectEnterpriseSKU
+set "TBOK_SKU_ENTERPRISE=0"
+set "TBOK_SKU="
+for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "try{(Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).OperatingSystemSKU}catch{'0'}" 2^>nul') do set "TBOK_SKU=%%A"
+for %%S in (4 27 29 84 121 122 125 161 162 164) do if "!TBOK_SKU!"=="%%S" set "TBOK_SKU_ENTERPRISE=1"
+exit /b 0
+
 ::helper for writing registry values to avoid writing extra lines of code per command for errors and logging
 :: Uses REG QUERY and REG ADD only for faster machine-level registry processing.
 :: Equivalent hexadecimal and decimal DWORD representations may be reapplied.
@@ -1496,6 +1528,9 @@ set "CurrentData="
 set "OriginalType="
 set "OriginalData="
 set "RegistryWriteRC="
+set "RegistryView=/reg:64"
+if /I "!RegPath:~0,4!"=="HKU\" set "RegistryView="
+if /I "!RegPath:~0,11!"=="HKEY_USERS\" set "RegistryView="
 
 if not defined RegPath goto :SetRegistryValue_InvalidPath
 if not defined RegName goto :SetRegistryValue_InvalidName
@@ -1503,7 +1538,7 @@ if not defined RegType goto :SetRegistryValue_InvalidType
 
 if not defined RegDescription set "RegDescription=!RegName!"
 
-for /f "skip=2 tokens=1,2,*" %%A in ('REG QUERY "!RegPath!" /v "!RegName!" 2^>nul') do (
+for /f "skip=2 tokens=1,2,*" %%A in ('REG QUERY "!RegPath!" /v "!RegName!" !RegistryView! 2^>nul') do (
     set "CurrentType=%%B"
     set "CurrentData=%%C"
 )
@@ -1511,9 +1546,10 @@ for /f "skip=2 tokens=1,2,*" %%A in ('REG QUERY "!RegPath!" /v "!RegName!" 2^>nu
 if not defined CurrentType goto :SetRegistryValue_Create
 
 if /I "!CurrentType!"=="!RegType!" (
-    if /I "!CurrentData!"=="!RegData!" (
-        goto :SetRegistryValue_Match
-    )
+    if /I "!RegType!"=="REG_DWORD" (
+        call :DwordValuesMatch "!CurrentData!" "!RegData!"
+        if not errorlevel 1 goto :SetRegistryValue_Match
+    ) else if /I "!CurrentData!"=="!RegData!" goto :SetRegistryValue_Match
 )
 
 set "OriginalType=!CurrentType!"
@@ -1522,7 +1558,7 @@ goto :SetRegistryValue_WriteChange
 
 
 :SetRegistryValue_Create
-REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
+REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f !RegistryView! >>"%LOGFILE%" 2>&1
 set "RegistryWriteRC=!ERRORLEVEL!"
 
 if not "!RegistryWriteRC!"=="0" goto :SetRegistryValue_Failed
@@ -1530,7 +1566,7 @@ goto :SetRegistryValue_Created
 
 
 :SetRegistryValue_WriteChange
-REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f >>"%LOGFILE%" 2>&1
+REG ADD "!RegPath!" /v "!RegName!" /t "!RegType!" /d "!RegData!" /f !RegistryView! >>"%LOGFILE%" 2>&1
 set "RegistryWriteRC=!ERRORLEVEL!"
 
 if not "!RegistryWriteRC!"=="0" goto :SetRegistryValue_Failed
@@ -1564,7 +1600,7 @@ exit /b 0
 :SetRegistryValue_Failed
 if defined TBOK_PROFILE_SUMMARY_MODE goto :SetRegistryValue_SummaryFailed
 
-call :LOG ERROR: Failed to configure !RegDescription!. Exit code: !RegistryWriteRC!.
+call :LOG ERROR: Failed to configure !RegDescription! at !RegPath!\!RegName! [!RegType!]. Exit code: !RegistryWriteRC!.
 endlocal
 exit /b 1
 
@@ -1582,7 +1618,7 @@ exit /b 0
 
 
 :SetRegistryValue_SummaryFailed
-call :LOG ERROR: Failed to configure !RegDescription!. Exit code: !RegistryWriteRC!.
+call :LOG ERROR: Failed to configure !RegDescription! at !RegPath!\!RegName! [!RegType!]. Exit code: !RegistryWriteRC!.
 endlocal
 set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
 exit /b 1
@@ -1609,6 +1645,10 @@ exit /b 2
 :: Adds a named registry value without querying its previous state.
 :: In profile-summary mode, successful writes count as Applied.
 setlocal DisableDelayedExpansion
+set "RegistryPath=%~1"
+set "RegistryView=/reg:64"
+if /I "%RegistryPath:~0,4%"=="HKU\" set "RegistryView="
+if /I "%RegistryPath:~0,11%"=="HKEY_USERS\" set "RegistryView="
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: SetRegistryValueQuiet was called without a registry path.
@@ -1624,16 +1664,16 @@ if "%~3"=="" (
     call :LOG ERROR: SetRegistryValueQuiet was called without a registry type.
     exit /b 2
 )
-REG ADD "%~1" /v "%~2" /t "%~3" /d "%~4" /f >nul 2>>"%LOGFILE%"
+REG ADD "%~1" /v "%~2" /t "%~3" /d "%~4" /f %RegistryView% >nul 2>>"%LOGFILE%"
 set "RegWriteRC=%ERRORLEVEL%"
 if not "%RegWriteRC%"=="0" (
     for %%R in ("%RegWriteRC%") do (
         if defined TBOK_PROFILE_SUMMARY_MODE (
             endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
-            call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
+            call :LOG ERROR: Failed to configure %~5 at %~1\%~2 [%~3]. Exit code: %%~R.
         ) else (
             endlocal
-            call :LOG ERROR: Failed to configure %~5. Exit code: %%~R.
+            call :LOG ERROR: Failed to configure %~5 at %~1\%~2 [%~3]. Exit code: %%~R.
         )
         exit /b 1
     )
@@ -1648,22 +1688,26 @@ exit /b 0
 :EnsureRegistryKey
 :: Creates or verifies a registry key.
 setlocal DisableDelayedExpansion
+set "RegistryPath=%~1"
+set "RegistryView=/reg:64"
+if /I "%RegistryPath:~0,4%"=="HKU\" set "RegistryView="
+if /I "%RegistryPath:~0,11%"=="HKEY_USERS\" set "RegistryView="
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: EnsureRegistryKey was called without a registry path.
     exit /b 2
 )
-REG ADD "%~1" /f >nul 2>>"%LOGFILE%"
+REG ADD "%~1" /f %RegistryView% >nul 2>>"%LOGFILE%"
 set "RegistryKeyRC=%ERRORLEVEL%"
 
 if not "%RegistryKeyRC%"=="0" (
     for %%R in ("%RegistryKeyRC%") do (
         if defined TBOK_PROFILE_SUMMARY_MODE (
             endlocal & set /a "TBOK_PROFILE_FAILED+=1" >nul 2>&1
-            call :LOG ERROR: Failed to create or verify %~2. Exit code: %%~R.
+            call :LOG ERROR: Failed to create or verify %~2 at %~1. Exit code: %%~R.
         ) else (
             endlocal
-            call :LOG ERROR: Failed to create or verify %~2. Exit code: %%~R.
+            call :LOG ERROR: Failed to create or verify %~2 at %~1. Exit code: %%~R.
         )
         exit /b 1
     )
@@ -1677,12 +1721,16 @@ exit /b 0
 
 :DeleteRegistryKeyIfPresent
 setlocal DisableDelayedExpansion
+set "RegistryPath=%~1"
+set "RegistryView=/reg:64"
+if /I "%RegistryPath:~0,4%"=="HKU\" set "RegistryView="
+if /I "%RegistryPath:~0,11%"=="HKEY_USERS\" set "RegistryView="
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: DeleteRegistryKeyIfPresent was called without a registry path.
     exit /b 2
 )
-REG query "%~1" >nul 2>&1
+REG query "%~1" %RegistryView% >nul 2>&1
 
 if errorlevel 1 (
     if defined TBOK_PROFILE_SUMMARY_MODE (
@@ -1692,7 +1740,7 @@ if errorlevel 1 (
     )
     exit /b 0
 )
-REG delete "%~1" /f >nul 2>>"%LOGFILE%"
+REG delete "%~1" /f %RegistryView% >nul 2>>"%LOGFILE%"
 set "DeleteKeyRC=%ERRORLEVEL%"
 if not "%DeleteKeyRC%"=="0" (
     for %%R in ("%DeleteKeyRC%") do (
@@ -1716,6 +1764,10 @@ exit /b 0
 
 :DeleteRegistryValueIfPresent
 setlocal DisableDelayedExpansion
+set "RegistryPath=%~1"
+set "RegistryView=/reg:64"
+if /I "%RegistryPath:~0,4%"=="HKU\" set "RegistryView="
+if /I "%RegistryPath:~0,11%"=="HKEY_USERS\" set "RegistryView="
 if "%~1"=="" (
     endlocal
     call :LOG ERROR: DeleteRegistryValueIfPresent was called without a registry path.
@@ -1726,7 +1778,7 @@ if "%~2"=="" (
     call :LOG ERROR: DeleteRegistryValueIfPresent was called without a value name.
     exit /b 2
 )
-REG query "%~1" /v "%~2" >nul 2>&1
+REG query "%~1" /v "%~2" %RegistryView% >nul 2>&1
 if errorlevel 1 (
     if defined TBOK_PROFILE_SUMMARY_MODE (
         endlocal & set /a "TBOK_PROFILE_SKIPPED+=1" >nul 2>&1
@@ -1735,7 +1787,7 @@ if errorlevel 1 (
     )
     exit /b 0
 )
-REG delete "%~1" /v "%~2" /f >nul 2>>"%LOGFILE%"
+REG delete "%~1" /v "%~2" /f %RegistryView% >nul 2>>"%LOGFILE%"
 set "DeleteValueRC=%ERRORLEVEL%"
 if not "%DeleteValueRC%"=="0" (
     for %%R in ("%DeleteValueRC%") do (
@@ -1790,23 +1842,6 @@ exit /b 0
 ::::::::::::::::::::::::::::: SECTION END Helpers for Control Sets mapping::::::::::::::::::::::::::::
 
 
-:GetInstalledMemory
-:: helper to get the currently installed physical memory values to be used
-set "TBOK_MEMORY_KB="
-set "TBOK_MEMORY_MB="
-set "TBOK_MEMORY_GB="
-
-for /f "usebackq tokens=1-3 delims=;" %%A in (`powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$n=(Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop | Measure-Object -Property Capacity -Sum).Sum;if($n){'{0:F0};{1:F0};{2:F0}' -f ($n/1KB),($n/1MB),($n/1GB)}" 2^>nul`) do (
-    set "TBOK_MEMORY_KB=%%A"
-    set "TBOK_MEMORY_MB=%%B"
-    set "TBOK_MEMORY_GB=%%C"
-)
-if not defined TBOK_MEMORY_KB exit /b 1
-if not defined TBOK_MEMORY_MB exit /b 1
-if not defined TBOK_MEMORY_GB exit /b 1
-exit /b 0
-
-
 :ResolveSystemPolicy
 :: Resolve all hardware-dependent targets only after the hardware profile
 :: has completed successfully.
@@ -1819,6 +1854,7 @@ if not defined TBOK_SYSTEM_PROFILE_READY (
 set "TBOK_SYSMAIN_MODE=unchanged"
 set "TBOK_MMAGENT_POLICY=Unchanged"
 set "TBOK_PREFETCH_POLICY=Unchanged"
+set "TBOK_PRELAUNCH_POLICY=Unchanged"
 set "TBOK_LOW_MEMORY_POLICY=No"
 set "TBOK_HIBERNATION_POLICY=Unchanged"
 set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -1831,7 +1867,6 @@ if not defined TBOK_MEMORY_MB (
     call :LOG Hardware-dependent policy targets could not be resolved.
     exit /b 1
 )
-
 if not defined TBOK_MEMORY_GB set "TBOK_MEMORY_GB=Unknown"
 if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
 if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
@@ -1845,31 +1880,83 @@ if /I "!CHASSISTYPE!"=="Laptop" (
     set "TBOK_POWERPLAN_POLICY=Ultimate Performance"
 )
 
-:: Resolve SysMain, MMAgent, and Windows Prefetch policy.
+:: Resolve the combined RAM and system-drive memory policy.
 ::
-:: RAM <= 12 GB:
-::   Keep SysMain Automatic so MMAgent remains functional.
-::   Enable the low-memory MMAgent policy.
-::   Use boot prefetch only to reduce application-launch memory pressure.
+:: RAM <= 12 GB + SSD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 0
+::   EnableSuperfetch 0
 ::
-:: RAM > 12 GB:
-::   SSD     = SysMain Automatic, boot prefetch only.
-::   HDD     = SysMain Automatic, boot + application prefetch.
-::   Unknown = SysMain and Prefetch left unchanged.
+:: RAM <= 12 GB + HDD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 2
+::   EnableSuperfetch 0
+::
+:: RAM <= 12 GB + UNKNOWN:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher Unchanged
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + SSD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 2
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + HDD:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher 3
+::   EnableSuperfetch 0
+::
+:: RAM > 12 GB + UNKNOWN:
+::   SysMain Automatic
+::   Memory Compression Enabled
+::   Page Combining Enabled
+::   EnablePrefetcher Unchanged
+::   EnableSuperfetch Unchanged
+
+set "TBOK_SYSMAIN_MODE=auto"
 
 if !TBOK_MEMORY_MB! LEQ 12288 (
     set "TBOK_LOW_MEMORY_POLICY=Yes"
-    set "TBOK_MMAGENT_POLICY=Enabled"
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=2"
-) else if /I "!TBOK_DRIVETYPE!"=="SSD" (
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=2"
-) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
-    set "TBOK_SYSMAIN_MODE=auto"
-    set "TBOK_PREFETCH_POLICY=3"
-)
 
+    if /I "!TBOK_DRIVETYPE!"=="SSD" (
+        set "TBOK_MMAGENT_POLICY=LowMemorySSD"
+        set "TBOK_PREFETCH_POLICY=0"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
+        set "TBOK_MMAGENT_POLICY=LowMemoryHDD"
+        set "TBOK_PREFETCH_POLICY=2"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else (
+        set "TBOK_MMAGENT_POLICY=LowMemoryUnknown"
+        set "TBOK_PREFETCH_POLICY=Unchanged"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    )
+) else (
+    if /I "!TBOK_DRIVETYPE!"=="SSD" (
+        set "TBOK_MMAGENT_POLICY=HighMemorySSD"
+        set "TBOK_PREFETCH_POLICY=2"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else if /I "!TBOK_DRIVETYPE!"=="HDD" (
+        set "TBOK_MMAGENT_POLICY=HighMemoryHDD"
+        set "TBOK_PREFETCH_POLICY=3"
+        set "TBOK_PRELAUNCH_POLICY=0"
+    ) else (
+        set "TBOK_MMAGENT_POLICY=HighMemoryUnknown"
+        set "TBOK_PREFETCH_POLICY=Unchanged"
+        set "TBOK_PRELAUNCH_POLICY=Unchanged"
+    )
+)
 
 :: Page-file policy.
 if !TBOK_MEMORY_MB! GEQ 32768 (
@@ -1896,35 +1983,42 @@ call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
 call :LOG SysMain target: !TBOK_SYSMAIN_MODE!
 call :LOG MMAgent target: !TBOK_MMAGENT_POLICY!
 call :LOG Prefetch target: !TBOK_PREFETCH_POLICY!
+call :LOG Application PreLaunch target: !TBOK_PRELAUNCH_POLICY!
 call :LOG Hibernation target: !TBOK_HIBERNATION_POLICY!
 call :LOG Page-file target: !TBOK_PAGEFILE_POLICY!
 call :LOG Gaming power-plan target: !TBOK_POWERPLAN_POLICY!
-call :ShowAnalysisProgress 100 "Optimization policy ready"
+
 set "TBOK_POLICY_ALREADY_RESOLVED=1"
+call :ShowAnalysisProgress 100 "Optimization policy ready"
 exit /b 0
 
-:: Configure MMAgent features only for the low-memory profile.
-:ConfigureMemoryFeatures
-if /I not "!TBOK_MMAGENT_POLICY!"=="Enabled" (
-    call :LOG MMAgent settings were left unchanged by the resolved system policy.
-    exit /b 0
-)
 
-call :LOG Configuring SysMain and MMAgent for the low-memory profile...
+:: Configure SysMain and MMAgent according to the resolved system policy.
+:: SysMain must be Automatic and Running before MMAgent is configured.
+:: Application launch Prefetch and PreLaunch policies are applied separately
+:: through the PrefetchParameters registry values.
+:ConfigureMemoryFeatures
+call :LOG Configuring SysMain and MMAgent for the resolved memory and storage profile...
+call :LOG Memory profile: !TBOK_MMAGENT_POLICY!
+call :LOG SysMain target: Automatic
+call :LOG MemoryCompression target: Enabled
+call :LOG PageCombining target: Enabled
 
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
-    "$criticalFailure = $false;" ^
-    "$optionalFailure = $false;" ^
+    "$failure = $false;" ^
     "try {" ^
     "    Set-Service -Name SysMain -StartupType Automatic -ErrorAction Stop;" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    if ($sysMain.Status -ne 'Running') {" ^
+    "        Write-Output 'SysMain is not running. Starting SysMain before MMAgent configuration...';" ^
     "        Start-Service -Name SysMain -ErrorAction Stop;" ^
     "        $sysMain.WaitForStatus('Running', (New-TimeSpan -Seconds 15));" ^
     "    };" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    Write-Output ('SysMain startup target=Automatic; Status=' + $sysMain.Status);" ^
-    "    if ($sysMain.Status -ne 'Running') { throw 'SysMain did not reach the Running state.' };" ^
+    "    if ($sysMain.Status -ne 'Running') {" ^
+    "        throw 'SysMain did not reach the Running state.';" ^
+    "    };" ^
     "} catch {" ^
     "    Write-Output ('ERROR: SysMain could not be prepared for MMAgent: ' + $_.Exception.Message);" ^
     "    exit 1;" ^
@@ -1934,62 +2028,50 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "    Write-Output 'APPLIED: Memory compression enable was requested.';" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Memory compression could not be enabled: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
+    "    $failure = $true;" ^
     "};" ^
     "try {" ^
     "    Enable-MMAgent -PageCombining -ErrorAction Stop;" ^
     "    Write-Output 'APPLIED: Page combining enable was requested.';" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Page combining could not be enabled: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
-    "};" ^
-    "try {" ^
-    "    Disable-MMAgent -ApplicationPreLaunch -ErrorAction Stop;" ^
-    "    Write-Output 'APPLIED: Application prelaunch disable was requested.';" ^
-    "} catch {" ^
-    "    Write-Output ('NOTICE: Application prelaunch was left unchanged: ' + $_.Exception.Message);" ^
-    "    $optionalFailure = $true;" ^
+    "    $failure = $true;" ^
     "};" ^
     "try {" ^
     "    $final = Get-MMAgent -ErrorAction Stop;" ^
     "    $sysMain = Get-Service -Name SysMain -ErrorAction Stop;" ^
     "    Write-Output ('Final SysMainStatus=' + $sysMain.Status);" ^
     "    Write-Output ('Final MemoryCompression=' + $final.MemoryCompression);" ^
-    "    Write-Output ('Final ApplicationLaunchPrefetching=' + $final.ApplicationLaunchPrefetching);" ^
-    "    Write-Output ('Final ApplicationPreLaunch=' + $final.ApplicationPreLaunch);" ^
-    "    Write-Output ('Final OperationAPI=' + $final.OperationAPI);" ^
     "    Write-Output ('Final PageCombining=' + $final.PageCombining);" ^
     "    if ($sysMain.Status -ne 'Running') {" ^
     "        Write-Output 'ERROR: SysMain is not running after MMAgent configuration.';" ^
-    "        $criticalFailure = $true;" ^
+    "        $failure = $true;" ^
     "    };" ^
     "    if (-not $final.MemoryCompression) {" ^
-    "        Write-Output 'ERROR: Memory compression is not enabled in the final MMAgent state.';" ^
-    "        $criticalFailure = $true;" ^
+    "        Write-Output 'ERROR: MemoryCompression is not enabled.';" ^
+    "        $failure = $true;" ^
     "    };" ^
     "    if (-not $final.PageCombining) {" ^
-    "        Write-Output 'ERROR: Page combining is not enabled in the final MMAgent state.';" ^
-    "        $criticalFailure = $true;" ^
+    "        Write-Output 'ERROR: PageCombining is not enabled.';" ^
+    "        $failure = $true;" ^
     "    };" ^
     "} catch {" ^
     "    Write-Output ('ERROR: Final SysMain or MMAgent state could not be verified: ' + $_.Exception.Message);" ^
-    "    $criticalFailure = $true;" ^
-    "};" ^
-    "if ($optionalFailure) {" ^
-    "    Write-Output 'NOTICE: One optional MMAgent setting was unsupported and was left unchanged.';" ^
+    "    $failure = $true;" ^
     "};" ^
     "Write-Output 'NOTICE: A restart is required to validate the persistent SysMain and MMAgent state.';" ^
-    "if ($criticalFailure) { exit 1 } else { exit 0 }" ^
+    "if ($failure) { exit 1 } else { exit 0 }" ^
     >>"%LOGFILE%" 2>&1
 
 set "MemoryFeaturesRC=!ERRORLEVEL!"
 
 if not "!MemoryFeaturesRC!"=="0" (
-    call :LOG WARNING: Low-memory SysMain or MMAgent configuration failed.
+    call :LOG WARNING: SysMain or MMAgent configuration completed with one or more failures.
     exit /b 1
 )
 
-call :LOG Low-memory SysMain and MMAgent configuration completed.
+call :LOG SysMain is Automatic and Running.
+call :LOG Memory Compression and Page Combining configuration completed successfully.
 exit /b 0
 
 :: Capture a Windows memory snapshot and write it to the console and logfile.
@@ -2103,138 +2185,103 @@ if not "%TBOK_MEMORY_RC%"=="0" (
 endlocal
 exit /b 0
 
-:GetChassisType
-:: Helper for Chassis type detection to avoid enabling desktop tweaks on a device with a battery - Returns Laptop, Desktop, or Unknown in CHASSISTYPE for later logic use
-set "CHASSISTYPE=Unknown"
-for /f "delims=" %%G in ('powershell.exe -NoProfile -Command "$ct=@((Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue).ChassisTypes); if($null -ne ($ct -as [array])){if($ct -match '^(8|9|10|11|12|14|18|21|30|31|32)$'){'Laptop'}elseif($ct -match '^(3|4|5|6|7|13|15|16|24|35|36)$'){'Desktop'}else{'Unknown'}}else{'Unknown'}" 2^>nul') do set "CHASSISTYPE=%%G"
-exit /b
-
 :GetSystemProfile
-:: Helper to build variables required hardware profile for specific scenario optimizations.
-:: Cache the profile only after all required detection completed successfully.
+:: Build memory, chassis, and drive-media data in one PowerShell session.
+:: Memory discovery is required. Chassis and drive detection degrade safely to Unknown.
 if defined TBOK_SYSTEM_PROFILE_READY exit /b 0
-
-set "SystemProfileFailed=0"
 set "TBOK_SYSTEM_PROFILE_READY="
-call :ShowAnalysisProgress 5 "Initializing hardware profile"
-call :LOG Building hardware profile...
-call :GetInstalledMemory
-set "SystemProfileMemoryRC=!ERRORLEVEL!"
-if "!SystemProfileMemoryRC!"=="0" (
-    call :ShowAnalysisProgress 20 "Installed memory detected"
-) else (
-    call :ShowAnalysisProgress 20 "Memory detection incomplete"
-)
-if not "!SystemProfileMemoryRC!"=="0" (
-    set "SystemProfileFailed=1"
-    call :LOG WARNING: Installed memory could not be determined.
-)
-
-call :GetChassisType
-call :ShowAnalysisProgress 40 "Chassis profile detected"
-call :LOG Chassis profile: !CHASSISTYPE!
-::Detect whether the Windows system drive is an HDD or SSD and physical media type 
+set "TBOK_MEMORY_KB="
+set "TBOK_MEMORY_MB="
+set "TBOK_MEMORY_GB="
+set "CHASSISTYPE=Unknown"
 set "TBOK_DRIVETYPE=UNKNOWN"
-set "DriveDetectRC="
-set "DriveDetectFile=%TEMP%\TBOK-DriveDetect-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
+set "SystemProfileFile=%TEMP%\TBOK-SystemProfile-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
+call :ShowAnalysisProgress 5 "Initializing hardware profile"
+call :LOG Building consolidated hardware profile...
 
-call :LOG Detecting Windows system drive media type...
-call :ShowAnalysisProgress 50 "Analyzing system drive"
 powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
     "$ErrorActionPreference = 'Stop';" ^
     "try {" ^
-    "    $driveLetter = $env:SystemDrive.TrimEnd(':');" ^
-    "    $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop;" ^
-    "    $disk = $partition | Get-Disk -ErrorAction Stop;" ^
-    "    $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue);" ^
-    "    $matchingPhysical = @($physicalDisks | Where-Object { [string]$_.DeviceId -eq [string]$disk.Number });" ^
-    "    if ($matchingPhysical.Count -eq 0 -and $physicalDisks.Count -eq 1) {" ^
-    "        $matchingPhysical = $physicalDisks;" ^
-    "    };" ^
-    "    $isRotational = $false;" ^
-    "    $isSolidState = $false;" ^
-    "    if ([string]$disk.MediaType -eq 'HDD') {" ^
-    "        $isRotational = $true;" ^
-    "    } elseif ([string]$disk.MediaType -match 'SSD|SCM') {" ^
-    "        $isSolidState = $true;" ^
-    "    };" ^
-    "    foreach ($physicalDisk in $matchingPhysical) {" ^
-    "        if ([string]$physicalDisk.MediaType -eq 'HDD') {" ^
-    "            $isRotational = $true;" ^
-    "        } elseif ([string]$physicalDisk.MediaType -match 'SSD|SCM') {" ^
-    "            $isSolidState = $true;" ^
-    "        };" ^
-    "        if ($null -ne $physicalDisk.SpindleSpeed) {" ^
-    "            if ([uint64]$physicalDisk.SpindleSpeed -gt 0) {" ^
-    "                $isRotational = $true;" ^
-    "            } elseif ([uint64]$physicalDisk.SpindleSpeed -eq 0) {" ^
-    "                $isSolidState = $true;" ^
+    "    $memoryBytes = (Get-CimInstance -ClassName Win32_PhysicalMemory -ErrorAction Stop | Measure-Object -Property Capacity -Sum).Sum;" ^
+    "    if (-not $memoryBytes -or $memoryBytes -le 0) { throw 'Installed physical memory could not be determined.' };" ^
+    "    $chassis = 'Unknown';" ^
+    "    try {" ^
+    "        $chassisTypes = @((Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction Stop).ChassisTypes);" ^
+    "        if ($chassisTypes -match '^(8|9|10|11|12|14|18|21|23|30|31|32)$') { $chassis = 'Laptop' }" ^
+    "        elseif ($chassisTypes -match '^(3|4|5|6|7|13|15|16|24|35|36)$') { $chassis = 'Desktop' };" ^
+    "    } catch { Write-Output ('WARNING=Chassis detection: ' + $_.Exception.Message) };" ^
+    "    $driveType = 'UNKNOWN';" ^
+    "    try {" ^
+    "        $driveLetter = $env:SystemDrive.TrimEnd(':');" ^
+    "        $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop;" ^
+    "        $disk = $partition | Get-Disk -ErrorAction Stop;" ^
+    "        $physicalDisks = @(Get-PhysicalDisk -ErrorAction SilentlyContinue);" ^
+    "        $matchingPhysical = @($physicalDisks | Where-Object { [string]$_.DeviceId -eq [string]$disk.Number });" ^
+    "        if ($matchingPhysical.Count -eq 0 -and $physicalDisks.Count -eq 1) { $matchingPhysical = $physicalDisks };" ^
+    "        $isRotational = ([string]$disk.MediaType -eq 'HDD');" ^
+    "        $isSolidState = ([string]$disk.MediaType -match 'SSD|SCM');" ^
+    "        foreach ($physicalDisk in $matchingPhysical) {" ^
+    "            if ([string]$physicalDisk.MediaType -eq 'HDD') { $isRotational = $true };" ^
+    "            if ([string]$physicalDisk.MediaType -match 'SSD|SCM') { $isSolidState = $true };" ^
+    "            if ($null -ne $physicalDisk.SpindleSpeed) {" ^
+    "                if ([uint64]$physicalDisk.SpindleSpeed -gt 0) { $isRotational = $true }" ^
+    "                elseif ([uint64]$physicalDisk.SpindleSpeed -eq 0) { $isSolidState = $true };" ^
     "            };" ^
     "        };" ^
-    "    };" ^
-    "    Write-Output ('DETAIL: DiskNumber=' + $disk.Number + '; BusType=' + $disk.BusType + '; MediaType=' + $disk.MediaType + '; FriendlyName=' + $disk.FriendlyName);" ^
-    "    foreach ($physicalDisk in $matchingPhysical) {" ^
-    "        Write-Output ('DETAIL: PhysicalDisk=' + $physicalDisk.FriendlyName + '; MediaType=' + $physicalDisk.MediaType + '; SpindleSpeed=' + $physicalDisk.SpindleSpeed);" ^
-    "    };" ^
-    "    if ($isRotational) {" ^
-    "        Write-Output 'RESULT=HDD';" ^
-    "    } elseif ($isSolidState) {" ^
-    "        Write-Output 'RESULT=SSD';" ^
-    "    } elseif ([string]$disk.BusType -eq 'NVMe') {" ^
-    "        Write-Output 'RESULT=SSD';" ^
-    "    } elseif ([string]$disk.BusType -eq 'RAID') {" ^
-    "        Write-Output 'RESULT=UNKNOWN';" ^
-    "    } else {" ^
-    "        Write-Output 'RESULT=UNKNOWN';" ^
-    "    };" ^
+    "        if ($isRotational) { $driveType = 'HDD' }" ^
+    "        elseif ($isSolidState -or [string]$disk.BusType -eq 'NVMe') { $driveType = 'SSD' };" ^
+    "        Write-Output ('DETAIL=DiskNumber=' + $disk.Number + '; BusType=' + $disk.BusType + '; MediaType=' + $disk.MediaType + '; FriendlyName=' + $disk.FriendlyName);" ^
+    "    } catch { Write-Output ('WARNING=Drive detection: ' + $_.Exception.Message) };" ^
+    "    Write-Output ('MEMORY_KB={0:F0}' -f ($memoryBytes / 1KB));" ^
+    "    Write-Output ('MEMORY_MB={0:F0}' -f ($memoryBytes / 1MB));" ^
+    "    Write-Output ('MEMORY_GB={0:F0}' -f ($memoryBytes / 1GB));" ^
+    "    Write-Output ('CHASSIS=' + $chassis);" ^
+    "    Write-Output ('DRIVETYPE=' + $driveType);" ^
     "    exit 0;" ^
     "} catch {" ^
     "    Write-Output ('ERROR=' + $_.Exception.Message);" ^
     "    exit 1;" ^
-    "}" >"%DriveDetectFile%" 2>&1
-set "DriveDetectRC=!ERRORLEVEL!"
-if exist "%DriveDetectFile%" (
-    type "%DriveDetectFile%" >>"%LOGFILE%"
+    "}" >"%SystemProfileFile%" 2>&1
+set "SystemProfileRC=!ERRORLEVEL!"
+
+if exist "!SystemProfileFile!" type "!SystemProfileFile!" >>"%LOGFILE%"
+if not "!SystemProfileRC!"=="0" goto :GetSystemProfileFailed
+
+for /f "usebackq tokens=1,* delims==" %%A in ("!SystemProfileFile!") do (
+    if /I "%%A"=="MEMORY_KB" set "TBOK_MEMORY_KB=%%B"
+    if /I "%%A"=="MEMORY_MB" set "TBOK_MEMORY_MB=%%B"
+    if /I "%%A"=="MEMORY_GB" set "TBOK_MEMORY_GB=%%B"
+    if /I "%%A"=="CHASSIS" set "CHASSISTYPE=%%B"
+    if /I "%%A"=="DRIVETYPE" set "TBOK_DRIVETYPE=%%B"
 )
-if not "!DriveDetectRC!"=="0" (
-    set "SystemProfileFailed=1"
-    call :LOG WARNING: Drive detection PowerShell returned exit code !DriveDetectRC!.
-    
-	if defined DriveDetectFile (
-        if exist "!DriveDetectFile!" (
-            for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"ERROR=" "!DriveDetectFile!" 2^>nul') do (
-                call :LOG Drive detection error: %%B
-            )
-        )
-    )
-	
-    goto :GetSystemProfileCleanup
-)
-for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"RESULT=" "%DriveDetectFile%" 2^>nul') do (
-    set "TBOK_DRIVETYPE=%%B"
-)
-if /i not "!TBOK_DRIVETYPE!"=="HDD" if /i not "!TBOK_DRIVETYPE!"=="SSD" (
-    set "TBOK_DRIVETYPE=UNKNOWN"
-)
+
+if not defined TBOK_MEMORY_KB goto :GetSystemProfileFailed
+if not defined TBOK_MEMORY_MB goto :GetSystemProfileFailed
+if not defined TBOK_MEMORY_GB goto :GetSystemProfileFailed
+if /I not "!TBOK_DRIVETYPE!"=="HDD" if /I not "!TBOK_DRIVETYPE!"=="SSD" set "TBOK_DRIVETYPE=UNKNOWN"
+
+if exist "!SystemProfileFile!" del /q "!SystemProfileFile!" >nul 2>&1
+set "SystemProfileFile="
+call :ShowAnalysisProgress 35 "Installed memory detected"
+call :ShowAnalysisProgress 55 "Chassis profile detected"
 call :ShowAnalysisProgress 75 "System drive profile detected"
-
-:GetSystemProfileCleanup
-if defined DriveDetectFile (
-    if exist "%DriveDetectFile%" (
-        del /q "%DriveDetectFile%" >nul 2>&1
-    )
-)
+call :LOG Installed physical memory: !TBOK_MEMORY_MB! MB
+call :LOG Chassis profile: !CHASSISTYPE!
 call :LOG Storage profile: !TBOK_DRIVETYPE!
-if "!SystemProfileFailed!"=="1" (
-    set "TBOK_SYSTEM_PROFILE_READY="
-    set "SystemProfileFailed="
-    exit /b 1
-)
-
 call :ShowAnalysisProgress 85 "Hardware profile complete"
 set "TBOK_SYSTEM_PROFILE_READY=1"
-set "SystemProfileFailed="
 exit /b 0
+
+:GetSystemProfileFailed
+if exist "!SystemProfileFile!" (
+    for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"ERROR=" "!SystemProfileFile!" 2^>nul') do (
+        call :LOG Hardware profile error: %%B
+    )
+    del /q "!SystemProfileFile!" >nul 2>&1
+)
+set "SystemProfileFile="
+call :LOG ERROR: The consolidated hardware profile could not be completed.
+exit /b 1
 
 :InitializeTemporaryPlans
 set "TBOK_SERVICE_PLAN=%TEMP%\TBOK-ServicePlan-%COMPUTERNAME%-%RANDOM%-%RANDOM%.txt"
@@ -2359,6 +2406,11 @@ if "!TBOK_SEQUENCE_FAILED!"=="1" (
 )
 call :LOG ================================================================
 
+if "!TBOK_SEQUENCE_FAILED!"=="1" (
+    set "TBOK_FINAL_RC=1"
+) else (
+    set "TBOK_FINAL_RC=0"
+)
 set "TBOK_OPERATION_RC="
 set "TBOK_SEQUENCE_ACTIVE="
 set "TBOK_RUN_OPTIMIZE="
@@ -2551,7 +2603,7 @@ if errorlevel 1 (
 set "TBOK_REMOTE_CONTROLLER_RAW_ENV=!TBOK_REMOTE_CONTROLLER_RAW!"
 set "TBOK_REMOTE_CONTROLLER_ENV=!TBOK_REMOTE_CONTROLLER!"
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$prefix='::TBOK-REMOTE-PS::';$source=$env:TBOK_REMOTE_CONTROLLER_RAW_ENV;$destination=$env:TBOK_REMOTE_CONTROLLER_ENV;try{$lines=Get-Content -LiteralPath $source -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};Set-Content -LiteralPath $destination -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0}catch{Write-Output ('ERROR: Remote controller creation failed: '+$_.Exception.Message);exit 1}"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$prefix='::TBOK-REMOTE-PS::';$source=$env:TBOK_REMOTE_CONTROLLER_RAW_ENV;$destination=$env:TBOK_REMOTE_CONTROLLER_ENV;try{$lines=Get-Content -LiteralPath $source -ErrorAction Stop;$output=foreach($line in $lines){if($line.StartsWith($prefix)){$line.Substring($prefix.Length)}};Set-Content -LiteralPath $destination -Value $output -Encoding UTF8 -ErrorAction Stop;exit 0}catch{Write-Output ('ERROR: Remote controller creation failed: '+$_.Exception.Message);exit 1}"
 
 set "BuildRemoteControllerRC=!ERRORLEVEL!"
 
@@ -2714,7 +2766,7 @@ if "!TBOK_LOCAL_OUTPUT_PATH:~-1!"=="\" (
     set "TBOK_LOCAL_OUTPUT_PATH=!TBOK_LOCAL_OUTPUT_PATH:~0,-1!"
 )
 
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass ^
+powershell.exe -NoLogo -NoProfile -NonInteractive ^
     -File "!TBOK_REMOTE_CONTROLLER!" ^
     -ComputerName "!TBOK_REMOTE_HOST!" ^
     -BatchPath "%~f0" ^
@@ -2970,6 +3022,11 @@ if not defined TBOK_DRIVETYPE set "TBOK_DRIVETYPE=UNKNOWN"
 if not defined CHASSISTYPE set "CHASSISTYPE=Unknown"
 if not defined TBOK_SYSMAIN_MODE set "TBOK_SYSMAIN_MODE=unchanged"
 if not defined TBOK_MMAGENT_POLICY set "TBOK_MMAGENT_POLICY=Unchanged"
+if not defined TBOK_PREFETCH_POLICY set "TBOK_PREFETCH_POLICY=Unchanged"
+set "TBOK_PREFETCH_DISPLAY=Unchanged"
+if "!TBOK_PREFETCH_POLICY!"=="0" set "TBOK_PREFETCH_DISPLAY=Disabled"
+if "!TBOK_PREFETCH_POLICY!"=="2" set "TBOK_PREFETCH_DISPLAY=Boot Only"
+if "!TBOK_PREFETCH_POLICY!"=="3" set "TBOK_PREFETCH_DISPLAY=Application + Boot"
 if not defined TBOK_LOW_MEMORY_POLICY set "TBOK_LOW_MEMORY_POLICY=Unknown"
 if not defined TBOK_HIBERNATION_POLICY set "TBOK_HIBERNATION_POLICY=Unchanged"
 if not defined TBOK_PAGEFILE_POLICY set "TBOK_PAGEFILE_POLICY=Unchanged"
@@ -2978,6 +3035,7 @@ exit /b 0
 
 :MENU
 call :RefreshMenuProfile
+cls
 TITLE TBOK Windows Performance Optimizer Version %version% %verdate%
 ::MAKE SOUND rundll32.exe cmdext.dll,MessageBeepStub
 echo %CLR_WARN%                   Script now supports cmd line options for non-interactive sessions
@@ -2998,15 +3056,15 @@ echo %CLR_TITLE% *           Version %version% %verdate%                   *
 echo %CLR_TITLE% ********************************************************    ****************************************
 echo %CLR_TITLE% *                                                      *                 Target Config:
 echo %CLR_TITLE% *                                                      *
-echo %CLR_OPTION% *     Please type the number for option:               *        Low Ram Policy: !TBOK_LOW_MEMORY_POLICY! 
+echo %CLR_OPTION% *     Please type the number for option:               *        Low Ram Policy: !TBOK_LOW_MEMORY_POLICY!
 echo %CLR_OPTION% *  1. Optimize system *START HERE                      *        Sysmain target: !TBOK_SYSMAIN_MODE!
-echo %CLR_OPTION% *  2. Run BeardSweeper Disk Cleanup routine            *        MMAgent target mode: !TBOK_MMAGENT_POLICY!   
+echo %CLR_OPTION% *  2. Run BeardSweeper Disk Cleanup routine            *        MMAgent target mode: !TBOK_MMAGENT_POLICY!
 echo %CLR_OPTION% *  3. Apply Gaming Optimizations                       *        VM config target mode: !TBOK_PAGEFILE_POLICY!
 echo %CLR_OPTION% *  4. Update apps using WinGet                         *        Hibernation target mode: !TBOK_HIBERNATION_POLICY!
 echo %CLR_OPTION% *  5. EXIT                                             *        Gaming plan: !TBOK_POWERPLAN_POLICY!
-echo %CLR_TITLE% *                                                      *
-echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *          Log Reuse Enabled
-echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *
+echo %CLR_TITLE% *                                                      *        Prefetcher plan: !TBOK_PREFETCH_DISPLAY!
+echo %CLR_warn% *      IF THIS HELPED YOU OUT -Buy me a coffee         *
+echo %CLR_warn% *      "https://buymeacoffee.com/thebeardofl"          *                 Log Reuse Enabled
 echo %CLR_TITLE% ********************************************************    ****************************************
 echo %CLR_RESET%
 choice.exe /c 12345 /n /m "Enter 1-5: (Default: 1 in 30 seconds): " /t 30 /d 1 2>>"%LOGFILE%"
@@ -3044,6 +3102,10 @@ goto :EXIT
 call :CleanupTemporaryPlans
 call :InitializeTemporaryPlans
 call :GetSystemProfile
+if errorlevel 1 (
+    call :LOG ERROR: The hardware profile could not be completed. System optimizations are canceled.
+    exit /b 1
+)
 ECHO Creating Log file and adding system information
 call :LOG Detected:
 
@@ -3087,7 +3149,8 @@ call :ResolveSystemPolicy
 set "MemoryPolicyRC=!ERRORLEVEL!"
 
 if not "!MemoryPolicyRC!"=="0" (
-    call :LOG WARNING: The SysMain and MMAgent policy could not be resolved.
+    call :LOG ERROR: The SysMain and MMAgent policy could not be resolved. System optimizations are canceled.
+    exit /b 1
 ) else (
     call :ConfigureMemoryFeatures
     set "MemoryFeaturesRC=!ERRORLEVEL!"
@@ -3109,7 +3172,7 @@ if not "!ControlSetMappingRC!"=="0" (
 ECHO.
 ECHO.
 call :LOG **********************************************************
-call :LOG              Starting System Optimizations               
+call :LOG              Starting System Optimizations
 call :LOG **********************************************************
 :hibernation
 call :LOG Setting Hibernation Mode based on PC chassis type
@@ -3137,17 +3200,28 @@ if /I "!TBOK_HIBERNATION_POLICY!"=="Enabled" (
 )
 
 goto f8startup
-	
+:CheckBitLockerBeforeLegacyBoot
+set "TBOK_BITLOCKER_STATUS=Unknown"
+for /f "delims=" %%A in ('powershell.exe -NoLogo -NoProfile -NonInteractive -Command "try{$b=Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop;$b.ProtectionStatus.ToString()}catch{'Unknown'}" 2^>nul') do set "TBOK_BITLOCKER_STATUS=%%A"
+if /I "!TBOK_BITLOCKER_STATUS!"=="On" call :LOG WARNING: BitLocker protection is active on %SystemDrive%.
+if /I "!TBOK_BITLOCKER_STATUS!"=="Unknown" call :LOG WARNING: BitLocker status could not be determined. Legacy boot policy will be left unchanged.
+exit /b 0
+
 :F8startup
-call :LOG Restoring the much beloved F8 Startup menu availability - WHY DID THEY REMOVE THAT
+call :CheckBitLockerBeforeLegacyBoot
+if /I not "!TBOK_BITLOCKER_STATUS!"=="Off" (
+    call :LOG WARNING: BitLocker status is !TBOK_BITLOCKER_STATUS! on %SystemDrive%. Skipping legacy bootmenupolicy to avoid recovery-key prompts.
+) else (
+    call :LOG Restoring the much beloved F8 Startup menu availability - WHY DID THEY REMOVE THAT
 ::This is optional to enable but a good default to Restore
 ::Microsoft default wants you to power cycle your PC 2 times before giving you boot options - waste of time
 ::If you have bitlocker enabled - using F8 will prompt you for the recovery key when you use the legacy boot menu - be aware
-bcdedit.exe /set {default} bootmenupolicy legacy >>"%LOGFILE%" 2>&1
-if errorlevel 1 (
-    call :LOG ERROR: Failed to enable the legacy F8 boot menu.
-) else (
-    call :LOG Legacy F8 boot menu enabled successfully.
+    bcdedit.exe /set {default} bootmenupolicy legacy >>"%LOGFILE%" 2>&1
+    if errorlevel 1 (
+        call :LOG ERROR: Failed to enable the legacy F8 boot menu.
+    ) else (
+        call :LOG Legacy F8 boot menu enabled successfully.
+    )
 )
 ECHO.
 
@@ -3357,25 +3431,28 @@ ECHO.
 call :LOG Setting Windows Services to Optimized State
 ECHO.
 call :LOG **********************************************************
-call :LOG              Starting Services Optimizations             
+call :LOG              Starting Services Optimizations
 call :LOG **********************************************************
 
+call :DetectEnterpriseSKU
 call :LOG Disabling services that are not used or should be disabled
 ::deprecated means service not in current versions of windows 10 or 11pro-ent-ltsc
 ::deprecated call :SetServiceStartup AJRouter disabled
 call :SetServiceStartup AppVClient disabled
 call :SetServiceStartup NetTcpPortSharing disabled
 call :SetServiceStartup DialogBlockingService disabled
-call :SetServiceStartup DiagTrack disabled
+if "!TBOK_SKU_ENTERPRISE!"=="1" (
+    call :LOG NOTICE: Enterprise/Education SKU !TBOK_SKU! detected. DiagTrack is left unchanged for security-management compatibility.
+) else (
+    call :SetServiceStartup DiagTrack disabled
+)
 call :SetServiceStartup UevAgentService disabled
-call :SetServiceStartup ssh-agent disabled
+call :LOG NOTICE: ssh-agent startup is left unchanged to preserve SSH key and developer workflows.
 
-call :LOG Applying the resolved SysMain and MMAgent service policy
-:: TBOK SysMain and Prefetch policy:
-:: Systems with 12 GB or less RAM keep SysMain Automatic and use boot-only Prefetch.
-:: Higher-memory SSD systems keep SysMain Automatic and use boot-only Prefetch.
-:: Higher-memory HDD systems keep SysMain Automatic and use boot + application Prefetch.
-:: Higher-memory systems with unknown storage leave SysMain and Prefetch unchanged.
+call :LOG Applying the resolved SysMain service policy
+:: All resolved RAM and storage profiles require SysMain Automatic.
+:: ConfigureMemoryFeatures has already ensured SysMain is Running before
+:: applying the MMAgent Memory Compression and Page Combining settings.
 call :LOG Installed RAM: !TBOK_MEMORY_MB! MB
 call :LOG Storage profile: !TBOK_DRIVETYPE!
 call :LOG Low-memory policy: !TBOK_LOW_MEMORY_POLICY!
@@ -3384,20 +3461,15 @@ call :LOG SysMain target mode: !TBOK_SYSMAIN_MODE!
 if /I "!TBOK_SYSMAIN_MODE!"=="auto" (
     call :LOG Keeping SysMain Automatic according to the resolved system policy.
     call :SetServiceStartup SysMain auto
-) else if /I "!TBOK_SYSMAIN_MODE!"=="disabled" (
-    call :LOG Disabling SysMain on this higher-memory SSD system.
-    call :SetServiceStartup SysMain disabled
-) else if /I "!TBOK_SYSMAIN_MODE!"=="demand" (
-    call :LOG Setting SysMain to start on demand on this higher-memory HDD system.
-    call :SetServiceStartup SysMain demand
 ) else (
-    call :LOG SysMain and MMAgent were left unchanged because no reliable target mode was resolved.
+    call :LOG WARNING: No valid SysMain target was resolved. SysMain startup mode was left unchanged.
 )
+
 ECHO.
 call :LOG Done with services to disable
 ECHO.
 :windowsservicedemand
-call :LOG Setting non-critical Windows services to manual startup 
+call :LOG Setting non-critical Windows services to manual startup
 call :LOG They still function when needed but are not auto running on startup
 call :LOG Many of these are manual by default anyway -FYI
 call :LOG Some of this process is just to restore that behaviour in case something changed them
@@ -3419,7 +3491,11 @@ call :SetServiceStartup dcsvc demand
 call :SetServiceStartup defragsvc demand
 call :SetServiceStartup DevQueryBroker demand
 call :SetServiceStartup DeviceAssociationService demand
-call :SetServiceStartup DeviceInstall demand
+if /I "!CHASSISTYPE!"=="Laptop" (
+    call :SetServiceStartup DeviceInstall auto
+) else (
+    call :SetServiceStartup DeviceInstall demand
+)
 call :SetServiceStartup diagnosticshub.standardcollector.service demand
 call :SetServiceStartup diagsvc demand
 call :SetServiceStartup DisplayEnhancementService demand
@@ -3624,6 +3700,7 @@ call :SetServiceStartup tiledatamodelsvc auto
 call :SetServiceStartup TrkWks auto
 call :SetServiceStartup uhssvc auto
 call :SetServiceStartup UserManager auto
+call :SetServiceStartup W32Time auto
 call :SetServiceStartup Wcmsvc auto
 call :SetServiceStartup Winmgmt auto
 call :SetServiceStartup WlanSvc auto
@@ -3652,7 +3729,6 @@ ECHO.
 :windowsservicedelayedauto
 Call :LOG Changing less essential services to delayed-auto
 call :SetServiceStartup BITS delayed-auto
-call :SetServiceStartup W32Time delayed-auto
 call :SetServiceStartup WSearch delayed-auto
 call :SetServiceStartup wudfsvc delayed-auto
 ::omit call :SetServiceStartup MapsBroker delayed-auto
@@ -3679,12 +3755,27 @@ call :LOG        Enabling System-wide Registry Improvements
 call :LOG ********************************************************************************
 echo(
 
+call :LOG Applying resolved Windows Prefetch and PreLaunch policy
 
-call :LOG Applying resolved Windows Prefetch policy
 if /I "!TBOK_PREFETCH_POLICY!"=="Unchanged" (
-    call :LOG Windows Prefetch configuration was left unchanged.
+    call :LOG Windows EnablePrefetcher configuration was left unchanged.
 ) else (
-    call :SetRegistryValue "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" "EnablePrefetcher" "REG_DWORD" "!TBOK_PREFETCH_POLICY!" "Windows EnablePrefetcher"
+    call :SetRegistryValue ^
+        "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" ^
+        "EnablePrefetcher" ^
+        "REG_DWORD" ^
+        "!TBOK_PREFETCH_POLICY!" ^
+        "Windows EnablePrefetcher"
+)
+if /I "!TBOK_PRELAUNCH_POLICY!"=="Unchanged" (
+    call :LOG Windows Application PreLaunch configuration was left unchanged.
+) else (
+    call :SetRegistryValue ^
+        "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" ^
+        "EnableSuperfetch" ^
+        "REG_DWORD" ^
+        "!TBOK_PRELAUNCH_POLICY!" ^
+        "Windows Application PreLaunch"
 )
 
 call :LOG Disabling network throttling
@@ -3697,7 +3788,7 @@ call :LOG Optimize system responsiveness - 10 is optimal - setting to 0 actually
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" "REG_DWORD" "10" "SystemResponsiveness"
 
 call :LOG Speed up shutdown time
-call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "3000" "WaitToKillServiceTimeout"
+call :SetAllControlSetValues "Control" "WaitToKillServiceTimeout" "REG_SZ" "5000" "WaitToKillServiceTimeout"
 
 call :LOG Enabling long file system path support -why is this disabled by default Microsoft
 call :SetAllControlSetValues "Control\FileSystem" "LongPathsEnabled" "REG_DWORD" "1" "LongPathsEnabled"
@@ -3728,7 +3819,7 @@ call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization
 call :LOG Disabling Windows Platform Binary Table that allows vendors to execute programs at boot
 call :SetAllControlSetValues "Control\Session Manager" "DisableWpbtExecution" "REG_DWORD" "1" "DisableWpbtExecution"
 
-call :SetAllControlSetValues "Control\FirmwareResources" "WPBT" "REG_BINARY" "00" "WPBT firmware resource value"
+call :LOG Leaving the WPBT firmware resource untouched to preserve OEM boot utilities.
 
 call :LOG Fix Network Data Usage Graph not working
 call :SetAllControlSetValues "Services\Ndu" "Start" "REG_DWORD" "2" "Ndu service startup mode"
@@ -3745,6 +3836,10 @@ call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense" "
 call :LOG Storage Sense enabled with temporary-file cleanup when disk space is low.
 
 :systemtelemetry
+if "!TBOK_SKU_ENTERPRISE!"=="1" (
+    call :LOG NOTICE: Enterprise/Education SKU detected. Telemetry services and policies are left unchanged for security-management compatibility.
+    goto :systemtelemetrycomplete
+)
 call :LOG Disabling Windows System Telemetry Data Collection through Registry
 call :LOG Turning off telemetry data collection Local Machine
 call :SetAllControlSetValues "Control\WMI\AutoLogger\Diagtrack-Listener" "Start" "REG_DWORD" "0" "Diagtrack-Listener AutoLogger startup mode"
@@ -3759,6 +3854,8 @@ call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Windows\DataCollection"
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" "DisabledByGroupPolicy" "REG_DWORD" "1" "DisabledByGroupPolicy"
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting" "Disabled" "REG_DWORD" "1" "Disable Error Reporting"
 
+:systemtelemetrycomplete
+
 call :LOG Disable Powershell telemetry
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis" "REG_DWORD" "1" "DisableAIDataAnalysis"
 
@@ -3768,6 +3865,7 @@ call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryO
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" "DODownloadMode" "REG_DWORD" "0" "Delivery Optimization policy DODownloadMode"
 
 call :LOG Disabling Windows Feeds through machine policy
+call :EnsureRegistryKey "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" "Windows Feeds policy key"
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" "EnableFeeds" "REG_DWORD" "0" "Machine policy EnableFeeds"
 
 :EdgeTweaks
@@ -3804,7 +3902,7 @@ call :SetRegistryValue "HKLM\Software\Policies\Microsoft\Edge" "DiagnosticData" 
 call :LOG Disabling Microsoft Recall from being enabled
 call :SetRegistryValue "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement" "REG_DWORD" "0" "AllowRecallEnablement"
 
-call :LOG Optional:Enable verbose logon-off status on screen 
+call :LOG Optional:Enable verbose logon-off status on screen
 call :LOG replaces windows starting and shutting down messages with what its actually doing
 call :SetRegistryValue "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" "VerboseStatus" "REG_DWORD" "1" "VerboseStatus"
 
@@ -3840,7 +3938,7 @@ call :LOG System level registry tweaks completed
 ECHO.
 ECHO.
 call :LOG **********************************************************
-call :LOG               Time for some bloat removal                
+call :LOG               Time for some bloat removal
 call :LOG **********************************************************
 ECHO.
 call :BuildAppxInventory
@@ -3907,7 +4005,7 @@ call :ProcessProvisionedAppxPattern "*MicrosoftWindows.Client.WebExperience*" "W
 
 :DeleteScheduledTasks
 call :LOG **********************************************************
-call :LOG           Removing Telemetry Scheduled Tasks                
+call :LOG           Removing Telemetry Scheduled Tasks
 call :LOG **********************************************************
 ::==Remove wasteful Scheduled Tasks==
 :officetelemetrytasks
@@ -3984,14 +4082,14 @@ if errorlevel 1 (
 
 :USERTWEAKS
 call :LOG **********************************************************
-call :LOG        Enabling User-level Registry Improvements        
+call :LOG        Enabling User-level Registry Improvements
 call :LOG **********************************************************
 goto UserRegistryDeployment
 :: ===============================================================
 :: -START SECTION - APPLY PER USER REGISTRY SETTINGS TO ALL USERS
 :: ===============================================================
 :: PER USER REGISTRY KEYS TO APPLY - This section applies registry tweaks
-:: This will loop through each existing user account on the pc and apply the registry settings below 
+:: This will loop through each existing user account on the pc and apply the registry settings below
 
 :ResetProfileCounters
 set "TBOK_PROFILE_APPLIED=0"
@@ -4012,11 +4110,14 @@ call :LOG *****************************************************************
 ::***********************************************USER HKCU REGISTRY KEYS*******************************************
 
 call :LOG Speed up FileExplorer browsing and saving files by disabling Folder auto Discovery
-call :DeleteRegistryKeyIfPresent "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" "Explorer Bags for %BASE%"
-call :DeleteRegistryKeyIfPresent "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" "Explorer BagMRU for %BASE%"
-call :EnsureRegistryKey "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "Explorer AllFolders Shell key for %BASE%"
-
-call :SetRegistryValueQuiet "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType" "REG_SZ" "NotSpecified" "Explorer AllFolders FolderType for %BASE%"
+if defined TBOK_RESET_EXPLORERVIEWS (
+    call :DeleteRegistryKeyIfPresent "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags" "Explorer Bags for %BASE%"
+    call :DeleteRegistryKeyIfPresent "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU" "Explorer BagMRU for %BASE%"
+    call :EnsureRegistryKey "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "Explorer AllFolders Shell key for %BASE%"
+    call :SetRegistryValueQuiet "%BASE%\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType" "REG_SZ" "NotSpecified" "Explorer AllFolders FolderType for %BASE%"
+) else (
+    call :LOG Explorer folder views are preserved. Use /RESETEXPLORERVIEWS to reset them.
+)
 
 call :LOG Preference- Default Explorer to open at "This PC" as default instead of the quick menu
 ::--1 - fastest load --2 is default quick access - and 3 is downloads
@@ -4164,9 +4265,14 @@ call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Ex
 
 call :LOG Disable the people button in the taskbar
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People" "PeopleBand" "REG_DWORD" "0" "PeopleBand for %BASE%"
- 
-call :LOG Enable right-click menu to auto end tasks from taskbar 
-call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "AutoEndTasks" "REG_SZ" "1" "AutoEndTasks for %BASE%"
+
+call :LOG Enable right-click menu to auto end tasks from taskbar
+if defined TBOK_ALLOWFORCECLOSE (
+    call :LOG WARNING: AutoEndTasks is enabled by explicit /ALLOWFORCECLOSE request for %BASE%.
+    call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "AutoEndTasks" "REG_SZ" "1" "AutoEndTasks for %BASE%"
+) else (
+    call :SetRegistryValueQuiet "%BASE%\Control Panel\Desktop" "AutoEndTasks" "REG_SZ" "0" "AutoEndTasks disabled for %BASE%"
+)
 
 call :LOG Hide the meet now button on the taskbar
 call :SetRegistryValueQuiet "%BASE%\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" "HideSCAMeetNow" "REG_DWORD" "1" "HideSCAMeetNow for %BASE%"
@@ -4198,8 +4304,7 @@ call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Office\16.0\Common\Client
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Office\Common\ClientTelemetry" "VerboseLogging" "REG_DWORD" "0" "Common ClientTelemetry for %BASE%"
 call :SetRegistryValueQuiet "%BASE%\SOFTWARE\Microsoft\Office\16.0\Common\ClientTelemetry" "VerboseLogging" "REG_DWORD" "0" "Office 16 VerboseLogging for %BASE%"
 
-call :LOG Disabling sticky keys feature because leaving something on the shift key is just as bad as capslock for passwords
-call :SetRegistryValueQuiet "%BASE%\Control Panel\Accessibility\StickyKeys" "Flags" "REG_SZ" "58" "StickyKeys hotkey disable for %BASE%"
+call :LOG Accessibility StickyKeys settings are left unchanged.
 
 ::disabled this section because it negatively affects chips with CCD cache routing -X3d etc- and e-core parking when gaming
 ::add logic to detect if processor has CCD cache before disbling - for now leave as is
@@ -4240,6 +4345,21 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -Command ^
 set "ProfileLoadedRC=%ERRORLEVEL%"
 endlocal & exit /b %ProfileLoadedRC%
 
+:IsServiceProfile
+setlocal DisableDelayedExpansion
+set "TBOK_SERVICE_PROFILE_NAME=%~1"
+set "TBOK_SERVICE_PROFILE_PATH=%~2"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$n=$env:TBOK_SERVICE_PROFILE_NAME;if($n -match '(?i)^(?:\.NET.*|DefaultAppPool|WsiAccount|systemprofile|LocalService|NetworkService|Public)$'){exit 0};try{$p=Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop|Where-Object{$_.LocalPath -ieq $env:TBOK_SERVICE_PROFILE_PATH}|Select-Object -First 1;if($p -and $p.Special){exit 0}else{exit 1}}catch{exit 1}" >nul 2>&1
+set "ServiceProfileRC=%ERRORLEVEL%"
+endlocal & exit /b %ServiceProfileRC%
+
+:IsServiceSID
+setlocal DisableDelayedExpansion
+set "TBOK_SERVICE_PROFILE_SID=%~1"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$s=$env:TBOK_SERVICE_PROFILE_SID;try{$p=Get-CimInstance -ClassName Win32_UserProfile -ErrorAction Stop|Where-Object{$_.SID -eq $s}|Select-Object -First 1;if($p -and $p.Special){exit 0}else{exit 1}}catch{exit 1}" >nul 2>&1
+set "ServiceSIDRC=%ERRORLEVEL%"
+endlocal & exit /b %ServiceSIDRC%
+
 :UserRegistryDeployment
 call :LOG Starting per-user registry deployment...
 if not defined TBOK_PROFILE_SETTINGS_LISTED (
@@ -4267,6 +4387,12 @@ set "LoadedUserHiveCount=0"
 set "LoadedUserSettingsRC="
 
 for /f "delims=" %%U in ('REG query HKEY_USERS 2^>nul ^| findstr /B /I /L /C:"HKEY_USERS\S-1-5-21-" /C:"HKEY_USERS\S-1-12-1-" ^| findstr /V /I /C:"_Classes"') do (
+    set "LoadedHiveSID=%%U"
+    set "LoadedHiveSID=!LoadedHiveSID:HKEY_USERS\=!"
+    call :IsServiceSID "!LoadedHiveSID!"
+    if "!ERRORLEVEL!"=="0" (
+        call :LOG Skipping service profile SID: !LoadedHiveSID!
+    ) else (
     set /a "LoadedUserHiveCount+=1"
 
     call :ResetProfileCounters
@@ -4284,6 +4410,7 @@ for /f "delims=" %%U in ('REG query HKEY_USERS 2^>nul ^| findstr /B /I /L /C:"HK
 
     if not "!LoadedUserSettingsRC!"=="0" (
         call :LOG WARNING: ApplySettings did not complete for loaded hive %%U. Exit code: !LoadedUserSettingsRC!.
+    )
     )
 )
 
@@ -4303,7 +4430,11 @@ call :LOG Processing user profiles (NTUSER.DAT)
 for /f "delims=" %%D in ('dir /b /ad "%SystemDrive%\Users" 2^>nul ^| findstr /V /I /X /C:"Public" /C:"Default" /C:"Default User" /C:"All Users"') do (
     set "PROFILE_NAME=%%D"
     set "PROFILE_PATH=%SystemDrive%\Users\%%D"
-	
+    call :IsServiceProfile "!PROFILE_NAME!" "!PROFILE_PATH!"
+    if "!ERRORLEVEL!"=="0" (
+        call :LOG Skipping service profile: !PROFILE_PATH!
+    ) else (
+
         if exist "!PROFILE_PATH!\NTUSER.DAT" (
             call :IsProfileHiveLoaded "!PROFILE_PATH!"
             set "ProfileAlreadyLoadedRC=!ERRORLEVEL!"
@@ -4394,6 +4525,7 @@ for /f "delims=" %%D in ('dir /b /ad "%SystemDrive%\Users" 2^>nul ^| findstr /V 
         ) else (
             call :LOG Skipping profile directory without NTUSER.DAT: !PROFILE_PATH!
         )
+    )
 )
 
 set "PROFILE_NAME="
@@ -4499,7 +4631,7 @@ if not defined TBOK_POWERPLAN_POLICY (
 )
 
 call :LOG ****************************************************************
-call :LOG        Begin Gaming Improvements        
+call :LOG        Begin Gaming Improvements
 call :LOG ****************************************************************
 
 
@@ -4520,11 +4652,21 @@ if not "!ControlSetMappingRC!"=="0" (
 )
 
 call :LOG Reset and Redetect Windows HPET dependency -High Precision Event Timer- - fixes issue where HPET was not detected properly
-bcdedit.exe /deletevalue useplatformclock >nul 2>&1
+bcdedit.exe /enum {default} >nul 2>&1
 if errorlevel 1 (
-    call :LOG useplatformclock was not explicitly configured or could not be changed.
+    call :LOG ERROR: Could not query the default boot entry; useplatformclock was not changed.
 ) else (
-    call :LOG Removed explicit useplatformclock override.
+    bcdedit.exe /enum {default} | findstr /I /C:"useplatformclock" >nul
+    if errorlevel 1 (
+        call :LOG useplatformclock is not explicitly configured; no change was needed.
+    ) else (
+        bcdedit.exe /deletevalue {default} useplatformclock >>"%LOGFILE%" 2>&1
+        if errorlevel 1 (
+            call :LOG ERROR: Failed to remove the explicit useplatformclock override.
+        ) else (
+            call :LOG Removed explicit useplatformclock override.
+        )
+    )
 )
 
 call :LOG Requesting Hardware Accelerated GPU Scheduling -HAGS- where supported by the installed GPU and driver.
@@ -4579,7 +4721,7 @@ call :LOG Disabling PowerThrottling
 call :SetAllControlSetValues "Control\Power\PowerThrottling" "PowerThrottlingOff" "REG_DWORD" "1" "PowerThrottlingOff"
 
 :: Community-derived setting; not currently documented by Microsoft
-::Windows has a lazy mode mechanism in the MMCS CPU power management subsystem that allows the system 
+::Windows has a lazy mode mechanism in the MMCS CPU power management subsystem that allows the system
 ::to skip or defer some hardware events when CPU usage is low. This can save power but also introduces
 :: a small delay before the CPU reacts to input or events
 ::The NoLazyMode key overrides this behavior by telling the system not to skip events, so the CPU processes them as soon as they occur
@@ -4717,32 +4859,49 @@ endlocal
 call :LOG %~2 was closed successfully.
 exit /b 2
 
+:StopServiceForCleanup
+:: 0 = stopped by TBOK; 1 = not running; 2 = stop failed.
+setlocal DisableDelayedExpansion
+sc.exe query "%~1" 2>nul | findstr /R /C:"STATE *: *4 " >nul
+if errorlevel 1 (endlocal & exit /b 1)
+net.exe stop "%~1" /y >nul 2>&1
+if errorlevel 1 (endlocal & call :LOG WARNING: Service %~1 could not be stopped for cleanup. & exit /b 2)
+endlocal & call :LOG Temporarily stopped service %~1 for cleanup.
+exit /b 0
+
+:RestoreServiceAfterCleanup
+if not "%~2"=="0" exit /b 0
+net.exe start "%~1" >nul 2>&1
+if errorlevel 1 (call :LOG WARNING: Service %~1 was running before cleanup but could not be restarted. & exit /b 1)
+call :LOG Restored service %~1 to its pre-cleanup running state.
+exit /b 0
+
 :BeardSweeper
 call :LOG BeardSweeper performs aggressive system, application, and disk cleanup.
 call :LOG Running applications are terminated only during interactive cleanup.
 call :LOG Noninteractive cleanup preserves application processes and Windows rollback installation files.
 cls
 	call :LOG  Beard Sweeper, TBOK automagic disk cleanup script!
-	call :LOG  	Version 10-27-2026 mm/dd/yyyy
+	call :LOG  	Version Version %version% %verdate%
 	ECHO.
-	ECHO __/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\_________/\\\\\_______/\\\________/\\\_        
-	ECHO  _\///////\\\/////__\/\\\/////////\\\_____/\\\///\\\____\/\\\_____/\\\//__       
-	ECHO   _______\/\\\_______\/\\\_______\/\\\___/\\\/__\///\\\__\/\\\__/\\\//_____      
-	ECHO    _______\/\\\_______\/\\\\\\\\\\\\\\___/\\\______\//\\\_\/\\\\\\//\\\_____     
-	ECHO     _______\/\\\_______\/\\\/////////\\\_\/\\\_______\/\\\_\/\\\//_\//\\\____    
-	ECHO      _______\/\\\_______\/\\\_______\/\\\_\//\\\______/\\\__\/\\\____\//\\\___   
-	ECHO       _______\/\\\_______\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_____\//\\\__  
-	ECHO        _______\/\\\_______\/\\\\\\\\\\\\\/_____\///\\\\\/_____\/\\\______\//\\\_ 
-	ECHO         _______\///________\/////////////_________\/////_______\///________\///__  
-    ECHO.                                    
+	ECHO     __/\\\\\\\\\\\\\\\__/\\\\\\\\\\\\\_________/\\\\\_______/\\\________/\\\_
+	ECHO      _\///////\\\/////__\/\\\/////////\\\_____/\\\///\\\____\/\\\_____/\\\//__
+	ECHO       _______\/\\\_______\/\\\_______\/\\\___/\\\/__\///\\\__\/\\\__/\\\//_____
+	ECHO        _______\/\\\_______\/\\\\\\\\\\\\\\___/\\\______\//\\\_\/\\\\\\//\\\_____
+	ECHO         _______\/\\\_______\/\\\/////////\\\_\/\\\_______\/\\\_\/\\\//_\//\\\____
+	ECHO          _______\/\\\_______\/\\\_______\/\\\_\//\\\______/\\\__\/\\\____\//\\\___
+	ECHO           _______\/\\\_______\/\\\_______\/\\\__\///\\\__/\\\____\/\\\_____\//\\\__
+	ECHO            _______\/\\\_______\/\\\\\\\\\\\\\/_____\///\\\\\/_____\/\\\______\//\\\_
+	ECHO             _______\///________\/////////////_________\/////_______\///________\///__
+    ECHO.
 	ECHO.	Community effort can be tracked at https://github.com/TheBeardofKnowledge/Scripts-from-my-videos
 	ECHO.	Purpose of this batch file is to recover as much "safe" free space from your windows system drive
 	ECHO.	to gain back free space that Windows, other programs, and users have consumed.
 	ECHO. 	Credits: Because the work we do in I.T. is often unrecognized, this section will show anyone
 	ECHO. 	who contributes to the script to improve it - Thank you to all that have helped and tested.
-	ECHO. 	TheBeardofKnowledge https://thebeardofknowledge.bio.link/
-	ECHO. 	Credit...RayneDance.. https://github.com/RayneDance For improving chrome-edge profile handling
-	ECHO. 	Credit...WebFoundUs.. https://tiktok.com/webb_found_us For the Name "Beard Sweeper"
+	ECHO. 	TheBeardofKnowledge     https://thebeardofknowledge.bio.link/
+	ECHO. 	Credit...WebFoundUs..   https://tiktok.com/webb_found_us For the Name "Beard Sweeper"
+	ECHO. 	Credit...RayneDance..   https://github.com/RayneDance For improving web browser profile handling
 	ECHO.	Credit...tristanghanks..https://github.com/tristanghanks for catching and fixing all typo errors
 	ECHO.
 :StartofScript
@@ -4775,51 +4934,50 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 
 :BadPrintJobs
 	ECHO Deleting unreleased erroneous print jobs
-	NET STOP /Y Spooler >nul 2>&1
-	DEL /S /Q /F %systemroot%\system32\spool\printers\*.* >nul 2>&1
-	net start spooler >nul 2>&1
+	call :StopServiceForCleanup "Spooler"
+	set "SpoolerCleanupState=!ERRORLEVEL!"
+	DEL /S /Q /F "%systemroot%\system32\spool\printers\*.*" >nul 2>&1
+	call :RestoreServiceAfterCleanup "Spooler" "!SpoolerCleanupState!"
 	
 :fontcache
 	ECHO Clearing all Windows Font Cache
-	Net stop fontcache >nul 2>&1
-	DEL /S /Q /F %systemroot%\ServiceProfiles\LocalService\AppData\Local\FontCache\*.* >nul 2>&1
-	NET start fontcache	>nul 2>&1
+	call :StopServiceForCleanup "FontCache"
+	set "FontCacheCleanupState=!ERRORLEVEL!"
+	DEL /S /Q /F "%systemroot%\ServiceProfiles\LocalService\AppData\Local\FontCache\*.*" >nul 2>&1
+	call :RestoreServiceAfterCleanup "FontCache" "!FontCacheCleanupState!"
 
 :WindowsUpdatesCleanup
 	ECHO Performing Windows Updates Cleanup
-	net stop bits >nul 2>&1
-	net stop wuauserv >nul 2>&1
-	net stop appidsvc >nul 2>&1
-	net stop cryptsvc >nul 2>&1
+	for %%S in (BITS wuauserv AppIDSvc CryptSvc) do (
+		call :StopServiceForCleanup "%%S"
+		set "CleanupState_%%S=!ERRORLEVEL!"
+	)
 	ECHO Clearing Windows Update Cache
 	DEL /S /Q /F "%ALLUSERSPROFILE%\Application Data\Microsoft\Network\Downloader\*.*"	>nul 2>&1
 	rmdir /S /Q "%systemroot%\SoftwareDistribution" >nul 2>&1
 	rmdir /S /Q "%systemroot%\system32\catroot2" >nul 2>&1
-::commented out the below line because rolling back updates is needed, and it's usually only 1-2Gb.  
-::If you don't care about rolling back updates (DANGER Will Robinson), remove the :: in front of the next line.	
+::commented out the below line because rolling back updates is needed, and it's usually only 1-2Gb.
+::If you don't care about rolling back updates (DANGER Will Robinson), remove the :: in front of the next line.
 ::rmdir /S /Q "%systemroot%\Installer\$PatchCache$"  >nul 2>&1
 	DEL /S /Q /F "%systemroot%\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Logs\*.*" >nul 2>&1
-	ECHO Cleanup Complete - Starting Windows Update Services
-	net start bits >nul 2>&1
-	net start wuauserv >nul 2>&1
-	net start appidsvc >nul 2>&1
-	net start cryptsvc >nul 2>&1
+	ECHO Cleanup Complete - Restoring previous Windows Update service states
+	for %%S in (BITS wuauserv AppIDSvc CryptSvc) do (
+		call :RestoreServiceAfterCleanup "%%S" "!CleanupState_%%S!"
+		set "CleanupState_%%S="
+	)
 ::for extra aggressive Windows Image cleanup uncomment the next line by removing the :: but keep in mind you won't be able to revert this cleanup
 	::DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase
 
 :WindowsTempFilesCleanup
 	ECHO Deleting all System temporary files
 	DEL /S /Q /F "%systemroot%\Temp\*.*" >nul 2>&1
-	REM The Prefetch folder is intentionally not cleared. The optimize routine sets the
-	REM Windows Prefetch policy by RAM and disk type; wiping Prefetch here undoes that and
-	REM slows the next several boots and first app launches while it is rebuilt. SSDs are
-	REM not helped by clearing it.
 	DEL /S /Q /F "%systemroot%\LiveKernelReports\*.dmp"	>nul 2>&1
 	DEL /S /Q /F "%systemroot%\appcompat\backuptest\*.*" >nul 2>&1
-	REM %systemroot%\System32\sru holds the System Resource Usage Monitor database. It
-	REM backs the Task Manager app history, the network Data Usage page and battery-use
-	REM history. The optimize routine enables the Ndu service specifically to fix the Data
-	REM Usage graph, so this database and its logs are intentionally not deleted.
+	:: The Prefetch folder is intentionally not cleared. The optimize routine sets the
+	:: Windows Prefetch policy by RAM and disk type; wiping Prefetch here undoes that and
+	:: slows the next several boots and first app launches while it is rebuilt. SSDs are
+	:: not helped by clearing it.
+	::DEL /S /Q /F "%systemroot%\System32\sru\*.dat" >nul 2>&1
 
 :WindowsLogs
 	ECHO Cleaning Windows Log Files
@@ -4831,6 +4989,11 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%systemroot%\Logs\MeasuredBoot\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\SoftwareDistribution\DataStore\Logs\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\runSW.log" >nul 2>&1
+	:: %systemroot%\System32\sru holds the System Resource Usage Monitor database. It
+	:: backs the Task Manager app history, the network Data Usage page and battery-use
+	:: history. The optimize routine enables the Ndu service specifically to fix the Data
+	:: Usage graph, so this database and its logs are intentionally not deleted.
+	::DEL /S /Q /F "%systemroot%\system32\sru\*.log" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\WindowsUpdate\*.*" >nul 2>&1
 	DEL /S /Q /F "%systemroot%\Logs\*.LOG" >nul 2>&1
 	DEL /S /Q /F "%systemdrive%\ProgramData\USOshared\Logs\User\*.*" >nul 2>&1
@@ -4838,7 +5001,7 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 :UserProfileCleanup
 	ECHO Cleaning up user profiles
 	setlocal enableextensions
-	For /d %%u in (c:\users\*) do (
+    For /d %%u in ("%SystemDrive%\Users\*") do (
 	DEL /S /Q /F "%%u\Local Settings\Temp\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Temp\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Explorer\ThumbCacheToDelete\*.*"	>nul 2>&1
@@ -4848,9 +5011,10 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\explorer\thumbcache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Terminal Server Client\Cache\*.*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Microsoft\Office\16.0\OfficeFileCache\*.*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
-	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
+	:: Preserve Office owner and AutoRecover files that may indicate open or unsaved work.
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\PowerPoint\*.tmp" >nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Word\*.*" >nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\Excel\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Recordings\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Local\Packages\Microsoft.ScreenSketch_8wekyb3d8bbwe\TempState\Snips\*.*" >nul 2>&1
 	DEL /S /Q /F "%%u\AppData\Roaming\Microsoft\OneNote\16.0\cache\*.*" >nul 2>&1
@@ -4858,8 +5022,10 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	)
 
 :TheRecycleBinIsNotAfolder
-	ECHO Emptying the recycle bin... you weren't ACTUALLY storing stuff in there, were you? I hope not.
-	rd /s /q %systemdrive%\$Recycle.bin	>nul 2>&1
+    ECHO Emptying the recycle bin...
+    if defined TBOK_NONINTERACTIVE call :LOG NOTICE: Noninteractive cleanup will empty the Recycle Bin.
+    PowerShell.exe -NoLogo -NoProfile -NonInteractive -Command "try { Clear-RecycleBin -Force -Confirm:$false -ErrorAction Stop; exit 0 } catch { exit 1 }" >nul 2>&1
+    if errorlevel 1 call :LOG WARNING: Clear-RecycleBin reported an error.
 
 :UserProgramsCacheCleanup
 	Echo Cleaning up cache from programs that are space hogs
@@ -4870,7 +5036,7 @@ c:\windows\system32\rundll32.exe AppxDeploymentClient.dll,AppxCleanupOrphanPacka
 	set "ITunesPrepareRC=!ERRORLEVEL!"
 	RD /S /Q "%systemdrive%\ProgramData\Apple Inc\Installer Cache"	>nul 2>&1
 	RD /S /Q "%systemdrive%\ProgramData\Apple Computer\Installer Cache"	>nul 2>&1
-	For /d %%u in (c:\users\*) do (
+    For /d %%u in ("%SystemDrive%\Users\*") do (
 	RD /S /Q "%%u\AppData\roaming\Apple Computer\iTunes\iPhone Software Updates"	>nul 2>&1
 	RD /S /Q "%%u\AppData\roaming\Apple Computer\iTunes\iPod Software Updates"	>nul 2>&1
 	)
@@ -4879,14 +5045,14 @@ if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: iTunes mobile-device backups will be preserved.
     goto :FreakenMicrosoftTeams
 )
-ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is Y
-CHOICE /C YN /N /T 10 /D Y
+ECHO Do you wish to also delete existing iTunes mobile-device backups? [Y/N] Default is N
+CHOICE /C YN /N /T 10 /D N
 
 IF ERRORLEVEL 2 GOTO :FreakenMicrosoftTeams
 IF ERRORLEVEL 1 GOTO :iOSbackups
 
 :iOSbackups
-	For /d %%u in (c:\users\*) do (
+    For /d %%u in ("%SystemDrive%\Users\*") do (
 	RD /S /Q "%%u\AppData\roaming\Apple Computer\MobileSync\Backup"	>nul 2>&1
 	RD /S /Q "%%u\Apple\MobileSync\Backup" >nul 2>&1
 	)
@@ -4897,13 +5063,13 @@ IF ERRORLEVEL 1 GOTO :iOSbackups
 	set "TeamsClassicPrepareRC=!ERRORLEVEL!"
 	call :PrepareApplicationForCleanup "ms-teams.exe" "Microsoft Teams"
 	set "TeamsPrepareRC=!ERRORLEVEL!"
-	For /d %%u in (c:\users\*) do (
+    For /d %%u in ("%SystemDrive%\Users\*") do (
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\blob_storage\*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\cache\*"		>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\databases\*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\gpucache\*"		>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\indexeddb\*"	>nul 2>&1
-	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\Local Storage\*"	>nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\indexeddb\*"	>nul 2>&1
+	::DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\Local Storage\*"	>nul 2>&1
 	DEL /S /Q /F "%%u\AppData\roaming\microsoft\teams\tmp\*"		>nul 2>&1
 	)
 
@@ -4911,7 +5077,7 @@ IF ERRORLEVEL 1 GOTO :iOSbackups
 	ECHO Clearing Outlook Cache
 	call :PrepareApplicationForCleanup "outlook.exe" "Microsoft Outlook"
 	set "OutlookPrepareRC=!ERRORLEVEL!"
-	For /d %%u in (c:\users\*) do (
+    For /d %%u in ("%SystemDrive%\Users\*") do (
 	RD /S /Q "%%u\AppData\Local\Microsoft\Outlook\RoamCache\"	 >nul 2>&1
 	RD /S /Q "%%u\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\"	 >nul 2>&1
 	)
@@ -4952,7 +5118,7 @@ ECHO Cleaning OneDrive Cache for all users
 	sc stop wsearch >nul 2>&1
 	timeout /t 5 /nobreak >nul 2>&1
 	::flagging the search database as dirty so it can perform a reindex on next startup
-	REG ADD "HKLM\SOFTWARE\Microsoft\Windows Search" /v SetupCompletedSuccessfully /t REG_DWORD /d 0 /f >nul 2>&1
+    REG ADD "HKLM\SOFTWARE\Microsoft\Windows Search" /v SetupCompletedSuccessfully /t REG_DWORD /d 0 /f /reg:64 >nul 2>&1
 	::clearing out the existing search database
 	DEL /S /Q /F /A "%systemdrive%\ProgramData\Microsoft\Search\Data\Applications\Windows\*.*"  >nul 2>&1
 	::restoring Search service defaults
@@ -5086,77 +5252,77 @@ call :LOG Mozilla Firefox cache cleanup completed.
 	ECHO Maximizing Disk Cleanup registry settings for all safe to delete content
 
 :: Set all the CLEANMGR registry entries for Group #69 -have a sense of humor!
-	SET "_Group_No=StateFlags0069"	
+	SET "_Group_No=StateFlags0069"
 	SET "_RootKey=HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
 
 :: Temporary Setup Files
-	REG ADD "%_RootKey%\Active Setup Temp Folders" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Active Setup Temp Folders" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Branch Cache (WAN bandwidth optimization)
-	REG ADD "%_RootKey%\BranchCache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\BranchCache" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Catalog Files for the Content Indexer (deletes all files in the folder c:\catalog.wci)
-	REG ADD "%_RootKey%\Content Indexer Cleaner" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Content Indexer Cleaner" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Delivery Optimization Files (service to share bandwidth for uploading Windows updates)
-	REG ADD "%_RootKey%\Delivery Optimization Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Delivery Optimization Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Diagnostic data viewer database files (Windows app that sends data to Microsoft)
-	REG ADD "%_RootKey%\Diagnostic Data Viewer database Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Diagnostic Data Viewer database Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Direct X Shader cache (graphics cache, clearing this can can speed up application load time.)
-	REG ADD "%_RootKey%\D3D Shader Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\D3D Shader Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Downloaded Program Files (ActiveX controls and Java applets downloaded from the Internet)
-	REG ADD "%_RootKey%\Downloaded Program Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Downloaded Program Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Temporary Internet Files
-	REG ADD "%_RootKey%\Internet Cache Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Internet Cache Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Language resources Files (unused languages and keyboard layouts)
-	REG ADD "%_RootKey%\Language Pack" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Language Pack" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Offline Files (Web pages)
-	REG ADD "%_RootKey%\Offline Pages Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Offline Pages Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Old ChkDsk Files
-	REG ADD "%_RootKey%\Old ChkDsk Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Old ChkDsk Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Recycle Bin -If you store stuff in recycle bin... shame on you!
-	REG ADD "%_RootKey%\Recycle Bin" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Recycle Bin" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Retail Demo
-	REG ADD "%_RootKey%\RetailDemo Offline Content" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\RetailDemo Offline Content" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Update package Backup Files (old versions)
-	REG ADD "%_RootKey%\ServicePack Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\ServicePack Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Setup Log files (software install logs)
-	REG ADD "%_RootKey%\Setup Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Setup Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: System Error memory dump files (These can be very large if the system has crashed)
-	REG ADD "%_RootKey%\System error memory dump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\System error memory dump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: System Error minidump files (smaller memory crash dumps)
-	REG ADD "%_RootKey%\System error minidump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\System error minidump files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Temporary Files (%Windir%\Temp and %Windir%\Logs)
-	REG ADD "%_RootKey%\Temporary Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Temporary Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Windows Update Cleanup (old system files not migrated during a Windows Upgrade)
-	REG ADD "%_RootKey%\Update Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Update Cleanup" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Thumbnails (Explorer will recreate thumbnails as each folder is viewed.)
-	REG ADD "%_RootKey%\Thumbnail Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Thumbnail Cache" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 
 :: Windows Defender Antivirus
-	REG ADD "%_RootKey%\Windows Defender" /v %_Group_No% /d 2 /t REG_DWORD /f	>nul 2>&1
+    REG ADD "%_RootKey%\Windows Defender" /v %_Group_No% /d 2 /t REG_DWORD /f /reg:64	>nul 2>&1
 
 :: Windows error reports and feedback diagnostics
-	REG ADD "%_RootKey%\Windows Error Reporting Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f 	>nul 2>&1
+    REG ADD "%_RootKey%\Windows Error Reporting Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64 	>nul 2>&1
 
 :: Windows Upgrade log files
-	REG ADD "%_RootKey%\Windows Upgrade Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f	>nul 2>&1
+    REG ADD "%_RootKey%\Windows Upgrade Log Files" /v %_Group_No% /t REG_DWORD /d 00000002 /f /reg:64	>nul 2>&1
 call :LOG Disk Cleanup registry settings completed.
 call :LOG Running Windows Disk Cleanup. This can take a while.
 call :LOG CleanMgr timeout is 30 minutes.
@@ -5176,10 +5342,20 @@ if "!CleanMgrRC!"=="0" (
 
 call :LOG Cleaning superseded Windows component-store versions.
 
-DISM.exe /Online /Cleanup-Image /StartComponentCleanup >>"%LOGFILE%" 2>&1
+set "TBOK_DISM_OUTPUT=%TEMP%\TBOK-DISM-%RANDOM%-%RANDOM%.out"
+set "TBOK_DISM_ERROR=%TEMP%\TBOK-DISM-%RANDOM%-%RANDOM%.err"
+powershell.exe -NoLogo -NoProfile -NonInteractive -Command "try{$p=Start-Process -FilePath ($env:SystemRoot+'\System32\Dism.exe') -ArgumentList '/Online','/Cleanup-Image','/StartComponentCleanup' -PassThru -RedirectStandardOutput $env:TBOK_DISM_OUTPUT -RedirectStandardError $env:TBOK_DISM_ERROR;try{Wait-Process -Id $p.Id -Timeout 1800 -ErrorAction Stop;exit $p.ExitCode}catch{if(-not $p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue};exit 2}}catch{exit 1}" >>"%LOGFILE%" 2>&1
 set "ComponentCleanupRC=!ERRORLEVEL!"
+if exist "!TBOK_DISM_OUTPUT!" type "!TBOK_DISM_OUTPUT!" >>"%LOGFILE%"
+if exist "!TBOK_DISM_ERROR!" type "!TBOK_DISM_ERROR!" >>"%LOGFILE%"
+if exist "!TBOK_DISM_OUTPUT!" del /q "!TBOK_DISM_OUTPUT!" >nul 2>&1
+if exist "!TBOK_DISM_ERROR!" del /q "!TBOK_DISM_ERROR!" >nul 2>&1
+set "TBOK_DISM_OUTPUT="
+set "TBOK_DISM_ERROR="
 
-if not "!ComponentCleanupRC!"=="0" (
+if "!ComponentCleanupRC!"=="2" (
+    call :LOG WARNING: DISM component-store cleanup exceeded the 30 minute timeout and was terminated.
+) else if not "!ComponentCleanupRC!"=="0" (
     call :LOG WARNING: Component-store cleanup returned exit code !ComponentCleanupRC!.
 ) else (
     call :LOG Component-store cleanup completed successfully.
@@ -5192,7 +5368,7 @@ if not "!CleanMgrRC!"=="0" exit /b 1
 if not "!ComponentCleanupRC!"=="0" exit /b 1
 if defined TBOK_NONINTERACTIVE (
     call :LOG Noninteractive cleanup: restore-point and previous-Windows-install removal was skipped.
-    goto :END
+    goto :BeardsweeperEND
 )
 
 :PreviousWindowsInstalls
@@ -5255,10 +5431,10 @@ IF exist "%systemdrive%\$Windows.~WS" (
 	) else (
 	ECHO No previous windows version folders found
 	)
-	
+
 :removeRestorePoints
 ::commended out due to triggerring some antivirus programs, if you want to include this, remove the "::"
-::vssadmin delete shadows /all >nul 2>&1 
+::vssadmin delete shadows /all >nul 2>&1
 ::Remove the "::" if you want the system to create a new restore point.
 ::wmic.exe /Namespace:\\root\default Path SystemRestore Call CreateRestorePoint "AfterDiskCleanup", 100, 7 >nul 2>&1
 
@@ -5345,13 +5521,17 @@ goto :EXIT
 :RESTART
 call :LOG Restarting PC.
 call :CleanupTemporaryPlans
+set "TBOK_EXIT_RC=0"
+if defined TBOK_FINAL_RC set "TBOK_EXIT_RC=!TBOK_FINAL_RC!"
 endlocal
-shutdown.exe /r /t 0
-exit /b 0
+shutdown.exe /r /t 1
+exit /b %TBOK_EXIT_RC%
 
 :EXIT
 call :LOG Script exiting.
 call :CleanupTemporaryPlans
 call :Delay 10
+set "TBOK_EXIT_RC=0"
+if defined TBOK_FINAL_RC set "TBOK_EXIT_RC=!TBOK_FINAL_RC!"
 endlocal
-exit /b 0
+exit /b %TBOK_EXIT_RC%
