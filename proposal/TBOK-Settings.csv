@@ -1,0 +1,122 @@
+Id,Scope,Path,Name,Type,Value,MinBuild,MaxBuild,Editions,Requires,Action,Evidence,Note,Source,Group
+M01,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile,NetworkThrottlingIndex,DWORD,4294967295,,,All,,Apply,Community,Only matters while MMCSS media playback is active; low throughput impact,,Optimize
+M02,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile,SystemResponsiveness,DWORD,10,,,All,,Apply,Doc,Values under 10 are clamped to 20,,Optimize
+M03,Machine,SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters,IRPStackSize,DWORD,30,,,All,,Drop,Community,Legacy fix for server storage errors; not a throughput setting,,Optimize
+M04,Machine,SYSTEM\CurrentControlSet\Control,WaitToKillServiceTimeout,SZ,3000,,,All,,Drop,Doc,Shortens service stop time below the 5000 ms default; risks database and VM write loss,,Optimize
+M05,Machine,SYSTEM\CurrentControlSet\Control\FileSystem,LongPathsEnabled,DWORD,1,14393,,All,,Apply,Doc,Apps must also be long-path aware,,Optimize
+M06,Machine,SOFTWARE\Policies\Microsoft\Windows\Device Metadata,PreventDeviceMetadataFromNetwork,DWORD,1,,,Pro;Ent;Edu;IoT,,Apply,Community,Edition support not confirmed in CSP docs,,Optimize
+M07,Machine,SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\1694661260,EnabledState,DWORD,1,,,All,,Drop,Undocumented,Feature IDs are build specific and change silently between releases,,Optimize
+M08,Machine,SOFTWARE\Policies\Microsoft\Windows\OOBE,DisablePrivacyExperience,DWORD,1,17763,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience,Optimize
+M09,Machine,SOFTWARE\Policies\Microsoft\Windows\OOBE,BypassNRO,DWORD,1,,,All,,Drop,Undocumented,Also drop SkipMachineOOBE DisableVoice PrivacyConsentStatus Protectyourpc HideEULAPage; nothing reads them under Policies,,Optimize
+M10,Machine,SOFTWARE\Policies\Microsoft\Windows\Personalization,NoLockScreen,DWORD,0,,,All,,Drop,Community,0 is the default; the policy is only honored on Enterprise and Education,,Optimize
+M11,Machine,SYSTEM\CurrentControlSet\Control\Session Manager,DisableWpbtExecution,DWORD,1,,,All,,Review,Community,Blocks firmware-injected executables including Absolute/Computrace anti-theft persistence,,Optimize
+M12,Machine,SYSTEM\CurrentControlSet\Control\FirmwareResources,WPBT,BINARY,00,,,All,,Drop,Undocumented,No documented consumer of this value,,Optimize
+M13,Machine,SYSTEM\CurrentControlSet\Services\Ndu,Start,DWORD,2,,,All,,Drop,Community,Already the default,,Optimize
+M14,Machine,SOFTWARE\Policies\Microsoft\Windows Defender\Scan,ScanAvgCPULoadFactor,DWORD,25,,,Pro;Ent;Edu;IoT,,Apply,Doc,No effect when a third-party antivirus is primary,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-defender#avgcpuloadfactor,Optimize
+M15,Machine,SOFTWARE\Policies\Microsoft\Windows\StorageSense,AllowStorageSenseGlobal,DWORD,1,18362,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-storage,Optimize
+M16,Machine,SOFTWARE\Policies\Microsoft\Windows\StorageSense,AllowStorageSenseTemporaryFilesCleanup,DWORD,1,18362,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-storage,Optimize
+M17,Machine,SOFTWARE\Policies\Microsoft\Windows\StorageSense,ConfigStorageSenseGlobalCadence,DWORD,0,18362,,Pro;Ent;Edu;IoT,,Apply,Doc,0 means run during low free space,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-storage,Optimize
+M18,Machine,SOFTWARE\Policies\Microsoft\Windows\StorageSense,ConfigStorageSenseRecycleBinCleanupThreshold,DWORD,30,18362,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-storage,Optimize
+M19,Machine,SYSTEM\CurrentControlSet\Control\WMI\AutoLogger\Diagtrack-Listener,Start,DWORD,0,,,All,Unmanaged,Review,Community,Breaks Intune Endpoint Analytics and Windows Update for Business reports on managed devices,,Optimize
+M20,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,AllowTelemetry,DWORD,0,,,Ent;Edu;IoT;Server,,Apply,Doc,Value 0 is honored only on Enterprise Education and Server,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-system#allowtelemetry,Optimize
+M21,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,AllowTelemetry,DWORD,1,,,Pro,,Apply,Doc,On Pro value 0 is treated as 1; write the value Windows will actually enforce,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-system#allowtelemetry,Optimize
+M22,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,AllowDesktopAnalyticsProcessing,DWORD,0,,,All,,Drop,Doc,Deprecated; only worked on 1809,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-system#allowdesktopanalyticsprocessing,Optimize
+M23,Machine,SOFTWARE\Wow6432Node\Policies\Microsoft\Windows\DataCollection,AllowTelemetry,DWORD,0,,,All,,Drop,Community,Nothing reads the 32-bit policy view,,Optimize
+M24,Machine,SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection,AllowTelemetry,DWORD,0,,,All,,Drop,Community,Duplicate of the policy key,,Optimize
+M25,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,DoNotShowFeedbackNotifications,DWORD,1,14393,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-experience#donotshowfeedbacknotifications,Optimize
+M26,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,DiagTrack,DWORD,0,,,All,,Drop,Undocumented,Not a policy value,,Optimize
+M27,Machine,SOFTWARE\Policies\Microsoft\Windows\DataCollection,LimitEnhancedDiagnosticDataWindowsAnalytics,DWORD,1,,,All,,Drop,Doc,Desktop Analytics is retired,,Optimize
+M28,Machine,SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo,DisabledByGroupPolicy,DWORD,1,14393,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableadvertisingid,Optimize
+M29,Machine,SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting,Disabled,DWORD,1,,,Pro;Ent;Edu;IoT,,Review,Doc,Policy path replaces the non-policy key; loses crash data used for troubleshooting,,Optimize
+M30,Machine,SOFTWARE\Policies\Microsoft\Windows\WindowsAI,DisableAIDataAnalysis,DWORD,1,26100.3915,,Pro;Ent;Edu;IoT,,Apply,Doc,Turns off Recall snapshots; old log label called this PowerShell telemetry,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-windowsai#disableaidataanalysis,Optimize
+M31,Machine,SOFTWARE\Policies\Microsoft\Windows\WindowsAI,AllowRecallEnablement,DWORD,0,26100.3915,,Pro;Ent;Edu;IoT,,Apply,Doc,Removes Recall bits and deletes snapshots; restart required; only Copilot+ PCs have Recall,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-windowsai#allowrecallenablement,Optimize
+M32,Machine,SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization,DODownloadMode,DWORD,1,,,All,,Apply,Doc,Replaces 0; LAN peering is the Windows default; use 2 plus DOGroupId for multi-subnet sites; CSP does not list Home,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-deliveryoptimization#dodownloadmode,Optimize
+M33,Machine,SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config,DODownloadMode,DWORD,0,,,All,,Drop,Community,Non-policy key overwritten by the Settings UI,,Optimize
+M34,Machine,SOFTWARE\Policies\Microsoft\Windows\Windows Feeds,EnableFeeds,DWORD,0,,19045,Pro;Ent;Edu,,Apply,Doc,Windows 10 news and interests only,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-feeds,Optimize
+M35,Machine,SOFTWARE\Policies\Microsoft\Dsh,AllowNewsAndInterests,DWORD,0,22000,,Pro;Ent;Edu;IoT,,Apply,Doc,Windows 11 widgets; supported alternative to removing the WebExperience package,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-newsandinterests,Optimize
+M36,Machine,SOFTWARE\Policies\Microsoft\Edge,StartupBoostEnabled,DWORD,0,,,All,Edge,Apply,Doc,Edge 88+,https://learn.microsoft.com/deployedge/microsoft-edge-policies/startupboostenabled,Optimize
+M37,Machine,SOFTWARE\Policies\Microsoft\Edge,EfficiencyModeEnabled,DWORD,1,,,All,Edge,Apply,Doc,Edge 106+; on devices without a battery this makes efficiency mode always active,https://learn.microsoft.com/deployedge/microsoft-edge-policies/efficiencymodeenabled,Optimize
+M38,Machine,SOFTWARE\Policies\Microsoft\Edge,SleepingTabsEnabled,DWORD,1,,,All,Edge,Apply,Doc,Edge 88+,https://learn.microsoft.com/deployedge/microsoft-edge-policies/sleepingtabsenabled,Optimize
+M39,Machine,SOFTWARE\Policies\Microsoft\Edge,SleepingTabsTimeout,DWORD,900,,,All,Edge,Apply,Doc,Edge 88+,https://learn.microsoft.com/deployedge/microsoft-edge-policies/sleepingtabstimeout,Optimize
+M40,Machine,SOFTWARE\Policies\Microsoft\Edge,BackgroundModeEnabled,DWORD,0,,,All,Edge,Apply,Doc,,https://learn.microsoft.com/deployedge/microsoft-edge-policies/backgroundmodeenabled,Optimize
+M41,Machine,SOFTWARE\Policies\Microsoft\Edge,HideFirstRunExperience,DWORD,1,,,All,Edge,Apply,Doc,,https://learn.microsoft.com/deployedge/microsoft-edge-policies/hidefirstrunexperience,Optimize
+M42,Machine,SOFTWARE\Policies\Microsoft\Edge,UserFeedbackAllowed,DWORD,0,,,All,Edge,Apply,Doc,,https://learn.microsoft.com/deployedge/microsoft-edge-policies/userfeedbackallowed,Optimize
+M43,Machine,SOFTWARE\Policies\Microsoft\Edge,EdgeShoppingAssistantEnabled,DWORD,0,,,All,Edge,Apply,Doc,,https://learn.microsoft.com/deployedge/microsoft-edge-policies/edgeshoppingassistantenabled,Optimize
+M44,Machine,SOFTWARE\Policies\Microsoft\Edge,DiagnosticData,DWORD,0,,,All,Edge,Apply,Doc,,https://learn.microsoft.com/deployedge/microsoft-edge-policies/diagnosticdata,Optimize
+M45,Machine,SOFTWARE\Policies\Microsoft\Edge,GamerModeEnabled,DWORD,1,,,All,Edge,Review,Undocumented,Not found in the Edge policy list I checked; verify before keeping,,Optimize
+M46,Machine,SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System,VerboseStatus,DWORD,1,,,All,,Apply,Community,,,Optimize
+M47,Machine,SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot,TurnOffWindowsCopilot,DWORD,1,,,All,,Drop,Doc,User-scope policy only; the machine write has no effect (see U48),https://learn.microsoft.com/windows/client-management/mdm/policy-csp-windowsai#turnoffwindowscopilot,Optimize
+M48,Machine,SOFTWARE\Microsoft\Windows\Shell\Copilot,IsCopilotAvailable,DWORD,0,,,All,,Drop,Undocumented,23H2-era internals; also drop CopilotDisabledReason BingChat IsUserEligible and the Shell Extensions Blocked CLSID,,Optimize
+M49,Machine,SOFTWARE\Policies\Microsoft\Windows\WindowsAI,RemoveMicrosoftCopilotApp,DWORD,1,26100,,Ent;Edu;IoT,,Apply,Doc,Removes the consumer Copilot app only when M365 Copilot is also installed and the app was not user-installed or launched in 28 days,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-windowsai#removemicrosoftcopilotapp,Optimize
+M50,Machine,SYSTEM\CurrentControlSet\Control,SvcHostSplitThresholdInKB,COMPUTED,RAM in KB plus 262144,15063,,All,,Review,Doc,Regroups services into shared svchost processes; less isolation for tens of MB,,Optimize
+M51,Machine,SYSTEM\CurrentControlSet\Control\Power\PowerThrottling,PowerThrottlingOff,DWORD,1,16299,,All,Desktop,Review,Community,Disables EcoQoS; on hybrid P/E-core CPUs background work can land on P-cores; measure before keeping,,Gaming
+M52,Machine,SYSTEM\CurrentControlSet\Control\Power\PowerThrottling,NoLazyMode,DWORD,1,,,All,Desktop,Drop,Undocumented,Also drop AlwaysOn,,Gaming
+M53,Machine,SYSTEM\CurrentControlSet\Control\GraphicsDrivers,HWSchMode,DWORD,2,19041,,All,,Apply,Doc,Needs a WDDM 2.7+ GPU driver; ignored otherwise,,Gaming
+M54,Machine,SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR\Graphics,OptimizationsForWindowedGames,DWORD,1,,,All,,Drop,Undocumented,Location not confirmed; the Settings toggle writes U53 instead,,Gaming
+M55,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games,Priority,DWORD,6,,,All,,Apply,Doc,MMCSS task priority,,Gaming
+M56,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games,Scheduling Category,SZ,Medium,,,All,,Apply,Doc,,,Gaming
+M57,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio,Priority,DWORD,6,,,All,,Apply,Doc,,,Gaming
+M58,Machine,SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio,Scheduling Category,SZ,Medium,,,All,,Apply,Doc,,,Gaming
+U01,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,LaunchTo,DWORD,1,,,All,,Apply,Community,Explorer opens at This PC,,Optimize
+U02,User,Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications,GlobalUserDisabled,DWORD,1,,19045,All,,Review,Community,Windows 10 only; breaks notifications for Store-delivered apps; Windows 11 uses per-app control or the LetAppsRunInBackground policy,,Optimize
+U03,User,Software\Microsoft\GameBar,AutoGameModeEnabled,DWORD,1,15063,,All,,Apply,Community,,,Optimize
+U04,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings,TaskbarEndTask,DWORD,1,22631,,All,,Apply,Community,Windows 11 23H2+,,Optimize
+U05,User,Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32,(Default),SZ,,22000,,All,LoadedHive,Apply,Community,Windows 11 classic context menu; needs the empty default value; only effective in signed-in hives because Classes lives in UsrClass.dat,,Optimize
+U06,User,Software\Microsoft\Windows\CurrentVersion\Search,BingSearchEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U07,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,Start_Layout,DWORD,1,22621,,All,,Apply,Community,Windows 11 22H2+,,Optimize
+U08,User,Control Panel\Desktop,MenuShowDelay,SZ,10,,,All,,Apply,Community,,,Optimize
+U09,User,Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects,VisualFXSetting,DWORD,3,,,All,,Apply,Community,,,Optimize
+U10,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,TaskbarAnimations,DWORD,0,,,All,,Apply,Community,,,Optimize
+U11,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,TaskbarAI,DWORD,0,22631,22631,All,,Apply,Community,23H2 Copilot button; removed in 24H2,,Optimize
+U12,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,ShowCopilotButton,DWORD,0,22631,22631,All,,Apply,Community,23H2 Copilot button; removed in 24H2,,Optimize
+U13,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,ListviewAlphaSelect,DWORD,1,,,All,,Apply,Community,,,Optimize
+U14,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,ListviewShadow,DWORD,1,,,All,,Apply,Community,,,Optimize
+U15,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,TaskbarMn,DWORD,0,22000,22621,All,,Apply,Community,Teams Chat icon existed only in 21H2 and 22H2,,Optimize
+U16,User,Control Panel\Desktop,DragFullWindows,SZ,1,,,All,,Apply,Community,,,Optimize
+U17,User,Control Panel\Desktop\WindowMetrics,MinAnimate,SZ,0,,,All,,Apply,Community,,,Optimize
+U18,User,Control Panel\Keyboard,KeyboardDelay,SZ,0,,,All,,Apply,Community,,,Optimize
+U19,User,Software\Microsoft\Windows\DWM,EnableAeroPeek,DWORD,0,,,All,,Apply,Community,,,Optimize
+U20,User,Software\Policies\Microsoft\Windows\Explorer,DisableSearchBoxSuggestions,DWORD,1,19041,,All,,Apply,Community,Removes web results from Start search,,Optimize
+U21,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,ShowSyncProviderNotifications,DWORD,0,,,All,,Apply,Community,,,Optimize
+U22,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,Start_AccountNotifications,DWORD,0,22621.2361,,All,,Apply,Community,,,Optimize
+U23,User,Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement,ScoobeSystemSettingEnabled,DWORD,0,19042,,All,,Apply,Community,,,Optimize
+U24,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,RotatingLockScreenOverlayEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U25,User,Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo,Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U26,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-310093Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U27,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-338387Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U28,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-353694Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U29,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-353696Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U30,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-338388Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U31,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-338389Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U32,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-338393Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U33,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SubscribedContent-353698Enabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U34,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SystemPaneSuggestionsEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U35,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,SilentInstalledAppsEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U36,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,ContentDeliveryAllowed,DWORD,0,,,All,,Apply,Community,,,Optimize
+U37,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,OemPreInstalledAppsEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U38,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,PreInstalledAppsEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U39,User,Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager,PreInstalledAppsEverEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U40,User,Software\Microsoft\Siuf\Rules,NumberOfSIUFInPeriod,DWORD,0,,,All,,Apply,Community,,,Optimize
+U41,User,Software\Policies\Microsoft\Windows\CloudContent,DisableTailoredExperiencesWithDiagnosticData,DWORD,1,15063,,Pro;Ent;Edu;IoT,,Apply,Doc,,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-experience#allowtailoredexperienceswithdiagnosticdata,Optimize
+U42,User,Software\Microsoft\Windows\CurrentVersion\Explorer\OperationStatusManager,EnthusiastMode,DWORD,1,,,All,,Apply,Community,,,Optimize
+U43,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,Start_IrisRecommendations,DWORD,0,22621,,All,,Apply,Community,,,Optimize
+U44,User,Software\Microsoft\Windows\CurrentVersion\Privacy,TailoredExperiencesWithDiagnosticDataEnabled,DWORD,0,,,All,,Apply,Community,,,Optimize
+U45,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced,ShowTaskViewButton,DWORD,0,,,All,,Apply,Community,,,Optimize
+U46,User,Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\People,PeopleBand,DWORD,0,,19045,All,,Apply,Community,Windows 10 only,,Optimize
+U47,User,Control Panel\Desktop,AutoEndTasks,SZ,1,,,All,,Drop,Doc,Closes apps at shutdown without a save prompt; the taskbar End Task feature is U04,,Optimize
+U48,User,Software\Policies\Microsoft\Windows\WindowsCopilot,TurnOffWindowsCopilot,DWORD,1,19044.3758,22631,Pro;Ent;Edu;IoT,,Apply,Doc,Deprecated; only governs the pre-24H2 Copilot pane,https://learn.microsoft.com/windows/client-management/mdm/policy-csp-windowsai#turnoffwindowscopilot,Optimize
+U49,User,Software\Microsoft\Windows\CurrentVersion\WindowsCopilot,AllowCopilotRuntime,DWORD,0,,,All,,Drop,Undocumented,,,Optimize
+U50,User,Software\Policies\Microsoft\Windows\Explorer,HideSCAMeetNow,DWORD,1,,19045,All,,Apply,Community,Windows 10 only,,Optimize
+U51,User,Software\Microsoft\Windows\CurrentVersion\Search,SearchboxTaskbarMode,DWORD,1,,,All,,Apply,Community,1 = icon only on both 10 and 11,,Optimize
+U52,User,Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration,IsResumeAllowed,DWORD,0,26100,,All,,Apply,Community,,,Optimize
+U53,User,Software\Microsoft\DirectX\UserGpuPreferences,DirectXUserGlobalSettings,SZFLAGS,SwapEffectUpgradeEnable=1,22621,,All,,Apply,Community,Optimizations for windowed games; merged into the existing flag string so AutoHDR and VRR flags survive,,Gaming
+U54,User,Control Panel\Accessibility\StickyKeys,Flags,SZ,58,,,All,,Apply,Community,Disables the Shift x5 hotkey,,Optimize
+U55,User,Software\Microsoft\Office\16.0\Outlook\Options\Mail,EnableLogging,DWORD,0,,,All,Office,Apply,Community,Office 2013 (15.0) rows dropped; out of support,,Optimize
+U56,User,Software\Microsoft\Office\16.0\Outlook\Options\Calendar,EnableCalendarLogging,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U57,User,Software\Microsoft\Office\16.0\Word\Options,EnableLogging,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U58,User,Software\Policies\Microsoft\Office\16.0\OSM,EnableLogging,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U59,User,Software\Policies\Microsoft\Office\16.0\OSM,EnableUpload,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U60,User,Software\Microsoft\Office\16.0\Common,QMEnable,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U61,User,Software\Microsoft\Office\16.0\Common\Feedback,Enabled,DWORD,0,,,All,Office,Apply,Community,,,Optimize
+U62,User,Software\Microsoft\Office\Common\ClientTelemetry,DisableTelemetry,DWORD,1,,,All,Office,Apply,Community,,,Optimize
+U63,User,Software\Microsoft\Office\16.0\Common\ClientTelemetry,DisableTelemetry,DWORD,1,,,All,Office,Apply,Community,,,Optimize
