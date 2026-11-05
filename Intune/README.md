@@ -20,13 +20,15 @@ reboot (see below), and idempotent PowerShell instead of one-shot batch calls.
 ## Files
 
 - **Detection.ps1** - exit `0` if the target state is already applied, `1` otherwise.
-  Checks a version marker plus one concrete drift check (pagefile sizing) rather than
-  re-verifying every single service, so it stays fast on every Intune detection cycle.
+  Checks the applied version, a zero `FailureCount`, and one concrete drift check
+  (pagefile sizing). It does not re-verify every service or registry setting, so a later
+  external change to those settings is not detected by this script.
 - **Remediation.ps1** - applies the tweaks. Runs only when Detection.ps1 exits `1`.
 
 ## Setup in Intune
 
 Devices and monitoring > Scripts and remediations > Create:
+
 - Detection script file: `Detection.ps1`
 - Remediation script file: `Remediation.ps1`
 - Run this script using the logged-on credentials: **No** (runs as SYSTEM)
@@ -39,6 +41,10 @@ Devices and monitoring > Scripts and remediations > Create:
   fine on your own PC but not on a fleet. `Remediation.ps1` instead writes
   `HKLM:\SOFTWARE\TBOK-Optimizer\PendingReboot` (`1`/`0`) so you can react to it via your
   own reporting/compliance policy instead of rebooting unattended machines mid-workday.
+- **Rollback gate.** With the default `$Config.CreateRestorePoint = $true`, a system restore
+  point must be created before optimizer changes run. If it cannot be created, the script
+  attempts HKLM/HKCU registry exports and cancels without applying tweaks even if those
+  exports succeed. They are limited manual recovery aids, not a full system rollback.
 - **Pagefile bug fix.** `Set-CimInstance` against `Win32_PageFileSetting` throws
   `Value out of range` on a number of builds (a known CIM provider quirk with that class -
   it round-trips read-only properties on write). It's a non-terminating error, so the
@@ -48,7 +54,8 @@ Devices and monitoring > Scripts and remediations > Create:
   `Remediation.ps1` writes the `PagingFiles` value under
   `HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management` directly -
   the same value WMI itself writes - and reads it back before reporting success. Takes
-  effect on next reboot. The 32 GB "automatic" threshold uses installed RAM
+  effect on next reboot. Fixed-size pagefiles use the Windows system drive, and detection
+  uses the same path. The 32 GB "automatic" threshold uses installed RAM
   (`Win32_PhysicalMemory`), because `TotalPhysicalMemory` excludes hardware-reserved
   memory and a 32 GB machine reports about 32213 MB.
 - **Conservative defaults for a managed fleet**, toggled via the `$Config` block at the
@@ -67,6 +74,16 @@ Devices and monitoring > Scripts and remediations > Create:
     off by default - see the comments next to each flag in `Remediation.ps1`.
 
 ## Changelog
+
+### 1.3.1
+
+- Require a restore point before applying changes; registry exports alone are not treated
+  as complete rollback protection, and both export exit codes are checked. Restore the
+  temporary restore-point frequency setting.
+- Keep failed runs non-compliant so Intune retries them; profile hive load/unload failures
+  are included in `FailureCount`.
+- Use the Windows system drive for the fixed pagefile and Default profile hive, and skip
+  special profiles in both loaded and offline profile passes.
 
 ### 1.3.0
 

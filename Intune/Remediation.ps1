@@ -24,10 +24,10 @@ Intune : configurer "Run this script using the logged-on credentials" = No (exec
 - Plus aucun True/False dans la sortie standard.
 #>
 
-$ScriptVersion = '1.3.0'
-$MarkerPath    = 'HKLM:\SOFTWARE\TBOK-Optimizer'
-$LogDir        = "$env:ProgramData\TBOK-Optimizer"
-$LogFile       = Join-Path $LogDir 'remediation.log'
+$ScriptVersion = '1.3.1'
+$MarkerPath = 'HKLM:\SOFTWARE\TBOK-Optimizer'
+$LogDir = "$env:ProgramData\TBOK-Optimizer"
+$LogFile = Join-Path $LogDir 'remediation.log'
 
 $Config = @{
     CreateRestorePoint        = $true
@@ -60,6 +60,8 @@ $Config.Telemetry = @{
 New-Item -Path $LogDir -ItemType Directory -Force | Out-Null
 
 $script:FailureCount = 0
+New-Item -Path $MarkerPath -Force | Out-Null
+Remove-ItemProperty -LiteralPath $MarkerPath -Name AppliedVersion -ErrorAction SilentlyContinue
 
 function Write-Log {
     param([string]$Message)
@@ -81,7 +83,8 @@ function Invoke-Safely {
         if ($LASTEXITCODE -ne 0) { throw "native command exited $LASTEXITCODE" }
         Write-Log "OK: $Description"
         $ok = $true
-    } catch {
+    }
+    catch {
         Write-Log "FAILED: $Description -- $($_.Exception.Message)"
         $script:FailureCount++
     }
@@ -128,7 +131,8 @@ function Set-ServiceStartupSafely {
                 $null = sc.exe config $svc.Name start= delayed-auto
                 if ($LASTEXITCODE -eq 5) { throw [System.UnauthorizedAccessException]'Access denied' }
                 if ($LASTEXITCODE -ne 0) { throw "sc.exe exited $LASTEXITCODE" }
-            } else {
+            }
+            else {
                 Set-Service -Name $svc.Name -StartupType $StartupType -ErrorAction Stop
                 # Set-Service -StartupType Automatic ne retire pas DelayedAutostart.
                 if ($StartupType -eq 'Automatic' -and (Get-ServiceStartupType -Name $svc.Name) -eq 'DelayedAutomatic') {
@@ -138,16 +142,18 @@ function Set-ServiceStartupSafely {
             $after = Get-ServiceStartupType -Name $svc.Name
             if ($after -ne $StartupType) { throw "read back $after" }
             Write-Log "OK: service $($svc.Name) $current -> $StartupType"
-        } catch {
+        }
+        catch {
             $msg = $_.Exception.Message
             # -and et -or ont la meme priorite en PowerShell : parentheses obligatoires.
-            $inner  = $_.Exception.InnerException
+            $inner = $_.Exception.InnerException
             $denied = ($_.Exception -is [System.UnauthorizedAccessException]) -or
-                      (($inner -is [System.ComponentModel.Win32Exception]) -and ($inner.NativeErrorCode -eq 5)) -or
-                      ($msg -match 'Access denied|Acc.s refus')
+            (($inner -is [System.ComponentModel.Win32Exception]) -and ($inner.NativeErrorCode -eq 5)) -or
+            ($msg -match 'Access denied|Acc.s refus')
             if ($denied) {
                 Write-Log "SKIPPED: service $($svc.Name) $current -> $StartupType -- protected service (access denied)"
-            } else {
+            }
+            else {
                 Write-Log "FAILED: service $($svc.Name) $current -> $StartupType -- $msg"
                 $script:FailureCount++
             }
@@ -166,18 +172,39 @@ if ($Config.CreateRestorePoint) {
     Invoke-Safely "Ensure VSS service is running" {
         if ((Get-Service -Name VSS).Status -ne 'Running') { Start-Service VSS }
     }
+    $restoreFrequencyPath = 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+    $restoreFrequency = Get-ItemProperty -LiteralPath $restoreFrequencyPath -Name SystemRestorePointCreationFrequency -ErrorAction SilentlyContinue
+    $hadRestoreFrequency = $null -ne $restoreFrequency
+    $originalRestoreFrequency = if ($hadRestoreFrequency) { $restoreFrequency.SystemRestorePointCreationFrequency } else { $null }
     Invoke-Safely "Allow immediate restore point creation" {
-        Set-RegValue 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore' SystemRestorePointCreationFrequency DWord 0
+        Set-RegValue $restoreFrequencyPath SystemRestorePointCreationFrequency DWord 0
     }
     $rpOk = Invoke-Safely -PassThru "Create restore point 'Before Intune Optimizer Remediation'" {
         Checkpoint-Computer -Description 'Before Intune Optimizer Remediation' -RestorePointType MODIFY_SETTINGS
     }
+    Invoke-Safely "Restore System Restore point frequency setting" {
+        if ($hadRestoreFrequency) {
+            Set-RegValue $restoreFrequencyPath SystemRestorePointCreationFrequency DWord $originalRestoreFrequency
+        }
+        else {
+            Remove-ItemProperty -LiteralPath $restoreFrequencyPath -Name SystemRestorePointCreationFrequency -ErrorAction Stop
+        }
+    }
     if (-not $rpOk) {
-        Invoke-Safely "Fallback: export HKLM/HKCU registry backup" {
+        $fallbackOk = Invoke-Safely -PassThru "Fallback: export HKLM/HKCU registry backup" {
             reg export HKLM (Join-Path $LogDir 'HKLM-backup.reg') /y | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "reg export HKLM exited $LASTEXITCODE" }
             reg export HKCU (Join-Path $LogDir 'HKCU-backup.reg') /y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "reg export HKCU exited $LASTEXITCODE" }
         }
+        if (-not $fallbackOk) {
+            Write-Log 'CRITICAL: restore point and registry backup both failed.'
+        }
+        else {
+            Write-Log 'NOTICE: registry exports are not a complete system rollback; optimizer changes were canceled.'
+        }
+        Write-Output 'Remediation canceled: a system restore point could not be created. No optimizer tweaks were applied.'
+        exit 1
     }
 }
 
@@ -185,12 +212,14 @@ if ($Config.CreateRestorePoint) {
 if ($Config.ConfigureHibernation) {
     $chassisTypes = (Get-CimInstance -ClassName Win32_SystemEnclosure -ErrorAction SilentlyContinue).ChassisTypes
     $desktopTypes = 3, 4, 5, 6, 7, 13, 15, 16, 24
-    $laptopTypes  = 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32
+    $laptopTypes = 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32
     if ($chassisTypes | Where-Object { $_ -in $desktopTypes }) {
         Invoke-Safely "Disable hibernation (desktop, chassis=$($chassisTypes -join ','))" { powercfg -h off }
-    } elseif ($chassisTypes | Where-Object { $_ -in $laptopTypes }) {
+    }
+    elseif ($chassisTypes | Where-Object { $_ -in $laptopTypes }) {
         Invoke-Safely "Enable hibernation (laptop, chassis=$($chassisTypes -join ','))" { powercfg -h on }
-    } else {
+    }
+    else {
         Write-Log "SKIPPED: chassis type undetermined (raw=$($chassisTypes -join ',')) - hibernation left unchanged"
     }
 }
@@ -204,7 +233,7 @@ if ($Config.ApplyPerformanceTweaks) {
     Invoke-Safely "Set SystemResponsiveness to 10" {
         Set-RegValue 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' SystemResponsiveness DWord 10
     }
-    Invoke-Safely "Speed up service shutdown timeout" {
+    Invoke-Safely "Set service shutdown wait to 15 seconds" {
         Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' WaitToKillServiceTimeout String '5000'
     }
     Invoke-Safely "Enable long path support" {
@@ -212,6 +241,11 @@ if ($Config.ApplyPerformanceTweaks) {
     }
 
     $installedKB = (Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1KB
+    if ($null -eq $installedKB -or $installedKB -le 0) {
+        $script:FailureCount++
+        Write-Log 'FAILED: installed RAM could not be determined; memory-dependent settings were not applied.'
+        exit 1
+    }
     Invoke-Safely "Set SvcHost split threshold to installed RAM" {
         Set-RegValue 'HKLM:\SYSTEM\CurrentControlSet\Control' SvcHostSplitThresholdInKB DWord ([uint32]$installedKB)
     }
@@ -220,22 +254,24 @@ if ($Config.ApplyPerformanceTweaks) {
     # eux-memes ; les passer par WMI renvoie "Valeur hors de la plage" sur Win11 (Put() sur
     # une entree 0/0). Ecriture directe puis relecture. Effet au prochain redemarrage.
     #   '?:\pagefile.sys'              = gestion automatique
-    #   'C:\pagefile.sys <min> <max>'  = taille fixe
+    #   "$env:SystemDrive\pagefile.sys <min> <max>" = taille fixe
     $mmPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
-    $ramMB  = [Math]::Round($installedKB / 1KB, 0)
+    $ramMB = [Math]::Round($installedKB / 1KB, 0)
     if ($ramMB -ge 32768) {
         $target = '?:\pagefile.sys'
-        $label  = "automatic (RAM=$ramMB MB >= 32GB)"
-    } else {
-        $min    = 4096
-        $max    = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
-        $target = "C:\pagefile.sys $min $max"
-        $label  = "Initial=$min MB Maximum=$max MB (RAM=$ramMB MB)"
+        $label = "automatic (RAM=$ramMB MB >= 32GB)"
+    }
+    else {
+        $min = 4096
+        $max = if ($ramMB -lt 8192) { 8192 } elseif ($ramMB -lt 16384) { 16384 } else { 24576 }
+        $target = "$($env:SystemDrive)\pagefile.sys $min $max"
+        $label = "Initial=$min MB Maximum=$max MB (RAM=$ramMB MB)"
     }
     $currentPf = @((Get-ItemProperty -LiteralPath $mmPath -Name PagingFiles -ErrorAction SilentlyContinue).PagingFiles)
     if ($currentPf.Count -eq 1 -and $currentPf[0] -eq $target) {
         Write-Log "OK: pagefile already $label"
-    } else {
+    }
+    else {
         Invoke-Safely "Set pagefile $label (was '$($currentPf -join ' | ')')" {
             Set-RegValue $mmPath PagingFiles MultiString ([string[]]@($target))
             $readBack = @((Get-ItemProperty -LiteralPath $mmPath -Name PagingFiles).PagingFiles)
@@ -260,9 +296,11 @@ if ($Config.ApplyServiceStartupTweaks) {
         $isFastDisk = $bootDisk.BusType -eq 'NVMe' -or $bootDisk.MediaType -eq 'SSD'
         if ($isFastDisk) {
             Set-ServiceStartupSafely -Name SysMain -StartupType Disabled
-        } elseif ($ramGB -gt 12) {
+        }
+        elseif ($ramGB -gt 12) {
             Set-ServiceStartupSafely -Name SysMain -StartupType Manual
-        } else {
+        }
+        else {
             Set-ServiceStartupSafely -Name SysMain -StartupType Disabled
         }
     }
@@ -405,8 +443,10 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
     # les comptes virtuels EPM (S-1-5-110-*) et de service sont hors perimetre.
     $userSidPattern = '^S-1-(5-21|12-1)(-\d+)+$'
 
+    $userProfiles = @(Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue)
+    $specialSids = @($userProfiles | Where-Object { $_.Special -and $_.SID } | Select-Object -ExpandProperty SID)
     $loadedSids = @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue |
-        Where-Object { $_.PSChildName -match $userSidPattern } |
+        Where-Object { $_.PSChildName -match $userSidPattern -and $_.PSChildName -notin $specialSids } |
         Select-Object -ExpandProperty PSChildName)
 
     foreach ($sid in $loadedSids) {
@@ -418,15 +458,16 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
     }
 
     # Loaded : ruche ouverte par un autre processus, reg load echouerait.
-    $profiles = Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.Special -and -not $_.Loaded -and $_.SID -match $userSidPattern -and $_.SID -notin $loadedSids }
+    $profiles = $userProfiles |
+    Where-Object { -not $_.Special -and -not $_.Loaded -and $_.SID -match $userSidPattern -and $_.SID -notin $loadedSids }
 
-    foreach ($profile in $profiles) {
-        $hivePath = Join-Path $profile.LocalPath 'NTUSER.DAT'
+    foreach ($userProfile in $profiles) {
+        $hivePath = Join-Path $userProfile.LocalPath 'NTUSER.DAT'
         if (-not (Test-Path -LiteralPath $hivePath)) { continue }
         $loadResult = reg load 'HKU\TempHive' "$hivePath" 2>&1
         if ($LASTEXITCODE -ne 0) {
-            Write-Log "SKIPPED: could not load hive for $($profile.LocalPath) -- $loadResult"
+            $script:FailureCount++
+            Write-Log "FAILED: could not load hive for $($userProfile.LocalPath) -- $loadResult"
             continue
         }
         Set-UserPreferences -BaseKey 'Registry::HKEY_USERS\TempHive'
@@ -435,11 +476,12 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
         [gc]::WaitForPendingFinalizers()
         reg unload 'HKU\TempHive' 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Log "WARNING: could not unload hive for $($profile.LocalPath) -- may still be mounted"
+            $script:FailureCount++
+            Write-Log "WARNING: could not unload hive for $($userProfile.LocalPath) -- may still be mounted"
         }
     }
 
-    $defaultHive = 'C:\Users\Default\NTUSER.DAT'
+    $defaultHive = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
     if (Test-Path -LiteralPath $defaultHive) {
         reg load 'HKU\DefaultHive' $defaultHive 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
@@ -448,9 +490,12 @@ if ($Config.ApplyUserPreferenceTweaks -or $Config.DisableConsumerFeatures) {
             [gc]::WaitForPendingFinalizers()
             reg unload 'HKU\DefaultHive' 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
+                $script:FailureCount++
                 Write-Log "WARNING: could not unload Default profile hive -- may still be mounted"
             }
-        } else {
+        }
+        else {
+            $script:FailureCount++
             Write-Log "SKIPPED: could not load Default profile hive"
         }
     }
@@ -464,5 +509,11 @@ Set-ItemProperty -LiteralPath $MarkerPath -Name PendingReboot -Value ([int]$Rebo
 Set-ItemProperty -LiteralPath $MarkerPath -Name FailureCount -Value $script:FailureCount -Force
 
 Write-Log "=== Remediation finished. Failures=$($script:FailureCount) PendingReboot=$RebootRequired ==="
-Write-Output "Remediation applied (v$ScriptVersion). Failures: $($script:FailureCount). Reboot required: $RebootRequired. Log: $LogFile"
+if ($script:FailureCount -gt 0) {
+    Remove-ItemProperty -LiteralPath $MarkerPath -Name AppliedVersion -ErrorAction SilentlyContinue
+    Write-Output "Remediation incomplete (v$ScriptVersion). Failures: $($script:FailureCount). Reboot required: $RebootRequired. Log: $LogFile"
+    exit 1
+}
+Set-ItemProperty -LiteralPath $MarkerPath -Name AppliedVersion -Value $ScriptVersion -Force
+Write-Output "Remediation applied (v$ScriptVersion). Failures: 0. Reboot required: $RebootRequired. Log: $LogFile"
 exit 0
