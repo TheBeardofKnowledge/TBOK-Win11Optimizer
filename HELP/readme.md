@@ -1,4 +1,4 @@
-For common items that are requested but not yet included in the script; welcome to the help section.
+# For common items that are requested but not yet included in the script; welcome to the help section.
 
 These are simple remedy scripts for changes requested after running the script.
 
