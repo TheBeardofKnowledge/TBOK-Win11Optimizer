@@ -5,7 +5,7 @@ These are simple remedy scripts for changes requested after running the script.
 *WINDOWS INSIDERS
 
 If you are on the Windows Insider Program to get preview release builds through Windows Updates:  
-The telemetry & service changes, among other items in TBOKwinOptimizer will cause Insider Preview updates to stop because those data collection services and settings are stopped/OFF.
+The telemetry & service changes, among other items in TBOKwinOptimizer will cause Insider Preview updates to stop because those data collection services and settings will be disabled.
 
 The file: TBOK-Restore-Windows-Insider.bat will restore those settings to the Microsoft required status. Download & Run the file, then reboot your pc and set your insider settings again.
 Running a Windows Insider Build means Microsoft Gets Additional usage information about your system, what's installed, and how you use your computer, among other things.
